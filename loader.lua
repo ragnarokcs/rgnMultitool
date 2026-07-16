@@ -6,8 +6,8 @@ local REPO = "rgnMultitool"
 local BRANCH = "main"
 local BASE = "https://raw.githubusercontent.com/" .. USER .. "/" .. REPO .. "/" .. BRANCH .. "/"
 
-local MANIFEST_FILE = "rgnMultitool_version.dat"
-local CACHE_FILE = "rgnMultitool_latest.cache"
+local MANIFEST_FILE = "rgnMultitool_local_version.txt"
+local CACHE_FILE = "rgnMultitool_source_cache.txt"
 local EXPECTED_SIGNATURE = "RGN_MULTITOOL_SOURCE_V1"
 local DEFAULT_MIN_BYTES = 250000
 
