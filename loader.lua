@@ -55,6 +55,12 @@ local function parseManifest(text)
     return out
 end
 
+local function readLocalVersion()
+    local text = readFile(MANIFEST_FILE)
+    if type(text) ~= "string" then return nil end
+    return text:match("version%s*=%s*([^%s]+)")
+end
+
 local function validateSource(source, expectedVersion, minBytes)
     if type(source) ~= "string" or #source < (minBytes or DEFAULT_MIN_BYTES) then
         return nil, "source is missing or truncated"
@@ -90,10 +96,10 @@ function updater.check()
     if not manifest then return false, "update check failed: " .. tostring(manifestError), "error" end
     updater.remote_version = manifest.version
 
-    local localMeta = parseManifest(readFile(MANIFEST_FILE))
+    local localVersion = readLocalVersion()
     local cached = readFile(CACHE_FILE)
     local cachedChunk = validateSource(cached, manifest.version, manifest.min_bytes)
-    if localMeta and localMeta.version == manifest.version and cachedChunk then
+    if localVersion == manifest.version and cachedChunk then
         updater.current_version = manifest.version
         return true, "rgnMultitool is up to date (v" .. manifest.version .. ")", "current"
     end
@@ -113,9 +119,9 @@ local source, chunk, where
 
 if manifest then
     updater.remote_version = manifest.version
-    local localMeta = parseManifest(readFile(MANIFEST_FILE))
+    local localVersion = readLocalVersion()
     local cached = readFile(CACHE_FILE)
-    if localMeta and localMeta.version == manifest.version then
+    if localVersion == manifest.version then
         chunk = validateSource(cached, manifest.version, manifest.min_bytes)
         if chunk then source, where = cached, "cache" end
     end
