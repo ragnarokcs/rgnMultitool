@@ -27,10 +27,11 @@ Source-visible Aimware Lua toolkit for CS2. Every module lives in one compact me
 - Killsay with multilingual message packs, random/sequential order, custom templates and optional victim names.
 - Identity and Killsay features are opt-in and disabled by default.
 
-### Vote information (temporarily disabled)
+### Vote information
 
-- The previous Draw/FFI implementation is disabled in 1.1.1 after crash dumps identified a recursive stack-overflow path.
-- It will return only after an event-only implementation is validated without native chat or Draw-hook re-entry.
+- Always-on vote revealer with local team-colored chat messages and the voter overlay.
+- Version 1.1.2 separates event/session work from rendering and adds hard re-entry guards around both runtime callbacks.
+- The release keeps the proven per-file configuration and cache layout from 1.1.0; it does not use the reverted unified-storage experiment.
 
 ### Reliability
 

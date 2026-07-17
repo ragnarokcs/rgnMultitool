@@ -1,6 +1,6 @@
--- rgnMultitool v1.1.1: emergency stability hotfix for the vote Draw callback.
--- Optimized event engine with session rearming and safe modern/legacy finish flow.
-local RGN_MULTITOOL_VERSION = "1.1.1"
+-- rgnMultitool v1.1.2: restored vote revealer with a re-entry-safe runtime.
+-- Keeps the proven per-file configuration/cache layout from v1.1.0.
+local RGN_MULTITOOL_VERSION = "1.1.2"
 local RGN_MULTITOOL_SIGNATURE = "RGN_MULTITOOL_SOURCE_V1"
 _G.RGN_MULTITOOL_VERSION = RGN_MULTITOOL_VERSION
 pcall(function()
@@ -8815,15 +8815,14 @@ writeRuntime("module loaded")
 print("[rgnIdentity] loaded | custom name + scoreboard prefix | safe engine2 validation")
 end)
 
--- Disabled after two independent dumps showed the same recursive Draw path
--- exhausting CS2's stack. Keep the implementation source-visible for a later
--- event-only rewrite, but never register its FFI/chat/Draw hooks in this build.
-if false then
 loadModule("VOTES", function()
 -- rgnMultitool vote revealer.
 -- Uses documented game events and ordinary entity APIs. The only FFI call is
 -- the current local HUD-chat printer; Steam avatar vtables remain excluded.
--- This is a built-in service: always enabled and intentionally has no tab.
+-- The service is always enabled and intentionally has no tab. Event/session
+-- work runs outside Draw; Draw only renders the overlay behind a hard
+-- re-entry guard so a Panorama/chat refresh cannot recursively exhaust CS2's
+-- stack.
 local PLAY_SOUND, SHOW_TEAM, DISPLAY_DURATION = true, true, 15
 
 local active, order, playerNames, chatQueue = {}, {}, {}, {}
@@ -8833,7 +8832,7 @@ local currentVoteTeam, currentVoteLabel = nil, ""
 local armed, lastVote, endAt, voteOpen = true, 0, 0, false
 local eventCount, status = 0, "ready"
 local callbackEvents, drawCallbacks = 0, 0
-local nextListenerRefresh, nextSessionPoll = 0, 0
+local nextListenerRefresh, nextSessionPoll, nextLogicTick = 0, 0, 0
 local lastSessionKey
 local refreshVoteBridge, bridgeRefreshPending
 local RUNTIME_FILE = "rgnvotes_runtime.txt"
@@ -9319,8 +9318,10 @@ local function renderVotes()
     end
 end
 
-M._voteDrawCallback = function()
+local function voteLogicTick()
     local t = clock()
+    if t < nextLogicTick then return end
+    nextLogicTick = t + 0.05
     if t >= nextListenerRefresh then
         nextListenerRefresh = t + 2.0
         requestListeners()
@@ -9343,20 +9344,32 @@ M._voteDrawCallback = function()
     sendQueued(t)
     if lastVote > 0 and endAt == 0 and t - lastVote > 2.0 then endAt = t + DISPLAY_DURATION end
     if endAt > 0 and t >= endAt then clearVote("ready"); return end
+end
+
+local function voteDrawTick()
     renderVotes()
 end
 
 pcall(function() callbacks.Unregister("Draw", "rgnMultitool_VoteDraw") end)
+pcall(function() callbacks.Unregister("CreateMove", "rgnMultitool_VoteLogic") end)
 pcall(function() callbacks.Unregister("FireGameEvent", "rgnMultitool_VoteEvents") end)
-local drawGeneration = (tonumber(rawget(_G, "RGN_VOTE_DRAW_GENERATION")) or 0) + 1
-rawset(_G, "RGN_VOTE_DRAW_GENERATION", drawGeneration)
+local runtimeGeneration = (tonumber(rawget(_G, "RGN_VOTE_RUNTIME_GENERATION")) or 0) + 1
+rawset(_G, "RGN_VOTE_RUNTIME_GENERATION", runtimeGeneration)
+local drawBusy, logicBusy, eventBusy = false, false, false
 callbacks.Register("Draw", function()
-    if rawget(_G, "RGN_VOTE_DRAW_GENERATION") ~= drawGeneration then return end
+    if rawget(_G, "RGN_VOTE_RUNTIME_GENERATION") ~= runtimeGeneration or drawBusy then return end
+    drawBusy = true
     drawCallbacks = drawCallbacks + 1
-    if type(M._voteDrawCallback) == "function" then
-        local ok, err = pcall(M._voteDrawCallback)
-        if not ok then writeRuntime("draw callback error", { error = tostring(err), draws = drawCallbacks }) end
-    end
+    local ok, err = pcall(voteDrawTick)
+    if not ok then writeRuntime("draw callback error", { error = tostring(err), draws = drawCallbacks }) end
+    drawBusy = false
+end)
+callbacks.Register("CreateMove", function()
+    if rawget(_G, "RGN_VOTE_RUNTIME_GENERATION") ~= runtimeGeneration or logicBusy then return end
+    logicBusy = true
+    local ok, err = pcall(voteLogicTick)
+    if not ok then writeRuntime("logic callback error", { error = tostring(err) }) end
+    logicBusy = false
 end)
 requestListeners()
 lastSessionKey = sessionKey()
@@ -9370,13 +9383,15 @@ refreshVoteBridge = function(reason)
         -- Aimware v6 reliably delivers these events through the anonymous
         -- two-argument registration used by the original Vote Reveal script.
         callbacks.Register("FireGameEvent", function(event)
-            if rawget(_G, "RGN_VOTE_GENERATION") ~= generation then return end
+            if rawget(_G, "RGN_VOTE_GENERATION") ~= generation or eventBusy then return end
             if type(M._voteEventCallback) == "function" then
+                eventBusy = true
                 local ok, err = pcall(M._voteEventCallback, event)
                 if not ok then
                     print("[rgnVotes] event error: " .. tostring(err))
                     writeRuntime("callback error", { error = tostring(err), generation = generation })
                 end
+                eventBusy = false
             end
         end)
     end)
@@ -9389,9 +9404,15 @@ end
 
 refreshVoteBridge("module load")
 
-print("[rgnVotes] built-in service loaded | always on | local chat + overlay")
+callbacks.Register("Unload", function()
+    if rawget(_G, "RGN_VOTE_RUNTIME_GENERATION") ~= runtimeGeneration then return end
+    rawset(_G, "RGN_VOTE_RUNTIME_GENERATION", runtimeGeneration + 1)
+    rawset(_G, "RGN_VOTE_GENERATION", (tonumber(rawget(_G, "RGN_VOTE_GENERATION")) or 0) + 1)
+    drawBusy, logicBusy, eventBusy = false, false, false
 end)
-end
+
+print("[rgnVotes] built-in service loaded | always on | safe logic + local chat + overlay")
+end)
 
 do
     local wanted = { "WEAPONS", "AGENTS", "SKINS CUSTOM", "VIEWMODEL", "MOVEMENT", "IDENTITY", "KILLSAY", "CONFIGS" }
