@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.2 - 2026-07-17
+
+### Vote revealer restoration
+
+- Restored the always-on vote revealer while retaining the v1.1 per-file configuration and cache layout.
+- Moved listener refresh, session polling and local-chat queue work out of the Draw callback into a throttled logic callback.
+- Limited Draw to overlay rendering and added independent re-entry guards plus generation invalidation for reload/unload safety.
+- Preserved cosmetics, agents, custom characters, viewmodel, movement, Identity, Killsay and saved configurations unchanged.
+
 ## 1.1.1 - 2026-07-17
 
 ### Emergency stability hotfix
