@@ -1,5 +1,6 @@
--- rgnMultitool FINAL ALL-SKINS PERF: 20 Hz event engine, sparse maintenance, safe gloves and native modern/legacy flow.
-local RGN_MULTITOOL_VERSION = "1.0.0"
+-- rgnMultitool v1.1.0: cosmetics, movement, identity, Killsay and local vote information.
+-- Optimized event engine with session rearming and safe modern/legacy finish flow.
+local RGN_MULTITOOL_VERSION = "1.1.0"
 local RGN_MULTITOOL_SIGNATURE = "RGN_MULTITOOL_SOURCE_V1"
 _G.RGN_MULTITOOL_VERSION = RGN_MULTITOOL_VERSION
 pcall(function()
@@ -7,10 +8,10 @@ pcall(function()
     pcall(callbacks.Unregister, "Draw", "rgnMultitool_MISCLogic")
     pcall(callbacks.Unregister, "CreateMove", "rgnMultitool_MISCLogicMove")
     pcall(callbacks.Unregister, "FireGameEvent", "rgnMultitool_MISCEvents")
+    pcall(callbacks.Unregister, "FireGameEvent", "rgnMultitool_WeaponsSessionEvents")
     pcall(callbacks.Unregister, "Unload", "rgnMultitool_MISCUnload")
     if type(M) == "table" and type(M.Watermark) == "function" then pcall(M.Watermark, M, false) end
-end)-- rgnMultitool - unified rgnSKINS + rgnWEAPONS + rgnMISC + VIEWMODEL for Aimware CS2.
--- Generated from the active, working local versions. The original Lua files are untouched.
+end)-- rgnMultitool - unified Aimware CS2 toolkit.
 print("[rgnMultitool] unified build loading")
 
 -- Aimware keeps each Lua as a separate loaded script. Close the three standalone
@@ -109,7 +110,7 @@ local T = {
     notif_error   = { 235, 90, 90 },
 }
 
-local WH = { check = 28, button = 36, slider = 36, combo = 52, multicombo = 52, input = 52, color = 28 }
+local WH = { check = 28, button = 36, slider = 36, combo = 52, multicombo = 52, input = 52, color = 28, keybox = 52 }
 local function wheight(wd)
     if wd.kind == "listbox" then
         return ((wd.label and wd.label ~= "") and 18 or 0) + wd.h + 6
@@ -590,6 +591,10 @@ function Section:ColorPicker(label, col)
     return self:_add({ kind = "color", label = label, value = { col[1], col[2], col[3], col[4] or 255 } })
 end
 
+function Section:Keybox(label, def)
+    return self:_add({ kind = "keybox", label = label, value = tonumber(def) or 0 })
+end
+
 function Section:Listbox(label, items, height, def)
     local fill = (height == "fill")
     if fill then self._hasFill = true end
@@ -672,6 +677,22 @@ function Section:render(x, y, w)
     return h
 end
 
+local KEYBOX_NAMES = {
+    [0x00] = "None", [0x01] = "Mouse1", [0x02] = "Mouse2", [0x04] = "Mouse3",
+    [0x05] = "Mouse4", [0x06] = "Mouse5", [0x08] = "Backspace", [0x09] = "Tab",
+    [0x0D] = "Enter", [0x10] = "Shift", [0x11] = "Ctrl", [0x12] = "Alt",
+    [0x1B] = "Escape", [0x20] = "Space", [0x21] = "Page Up", [0x22] = "Page Down",
+    [0x23] = "End", [0x24] = "Home", [0x25] = "Left", [0x26] = "Up",
+    [0x27] = "Right", [0x28] = "Down", [0x2D] = "Insert", [0x2E] = "Delete",
+}
+local function keyboxName(code)
+    code = tonumber(code) or 0
+    if KEYBOX_NAMES[code] then return KEYBOX_NAMES[code] end
+    if code >= 0x30 and code <= 0x39 then return string.char(code) end
+    if code >= 0x41 and code <= 0x5A then return string.char(code) end
+    if code >= 0x70 and code <= 0x7B then return "F" .. tostring(code - 0x6F) end
+    return code > 0 and string.format("VK 0x%02X", code) or "None"
+end
 function Section:_widget(wd, x, y, w)
     if wd.kind == "check" then
         local box = 15
@@ -789,6 +810,28 @@ function Section:_widget(wd, x, y, w)
         end
         if focused then pollText(wd, now()) end
 
+    elseif wd.kind == "keybox" then
+        local by, bh = y + 18, 22
+        local active = (M._keybox == wd)
+        local hov = hovering(x, by, w, bh)
+        wd._h = approach(wd._h or 0, (hov or active) and 1 or 0, 16)
+        text(x, y, lerpc(T.text, T.texthi, wd._h), wd.label, FONT)
+        rbox(x, by, w, bh, 5, lerpc(T.widget, T.widgethi, wd._h), active and T.accent or T.border)
+        local shown = active and "Press a key (Esc clears)" or keyboxName(wd.value)
+        text(x + w / 2, by + 5, active and T.accent or T.text, fitText(shown, w - 16, FONT), FONT, "center")
+        if clicked(x, by, w, bh) then
+            if active then M._keybox = nil
+            else M._keybox = wd; wd._captureAt = now() + 0.12 end
+        end
+        if M._keybox == wd and now() >= (wd._captureAt or 0) then
+            for code = 1, 255 do
+                if keyPressed(code) then
+                    wd.value = (code == 0x1B or code == 0x08 or code == 0x2E) and 0 or code
+                    M._keybox = nil
+                    break
+                end
+            end
+        end
     elseif wd.kind == "color" then
         local hov = hovering(x, y, w, 20)
         wd._h = approach(wd._h or 0, hov and 1 or 0, 16)
@@ -2031,7 +2074,7 @@ function M:Build(opts)
         local open = true
         if menuRef then pcall(function() open = menuRef:IsActive() end) end
         self._open = open
-        if not open then self._focus = nil; self._inputDrag = nil end
+        if not open then self._focus = nil; self._inputDrag = nil; self._keybox = nil end
 
         local t  = now()
         local dt = 1
@@ -2051,7 +2094,43 @@ function M:Build(opts)
             return
         end
 
-        if not open and self._t < 0.005 and #self._toasts == 0 then self._t = 0; return end
+        local movementDrawn = false
+        local function drawMovementOverlay()
+            if movementDrawn then return end
+            movementDrawn = true
+            if type(self._movementDrawCallback) == "function" then
+                local ok, err = pcall(self._movementDrawCallback)
+                self._movementDrawAliveAt = t
+                if ok then
+                    self._movementDrawError = nil
+                else
+                    local message = tostring(err)
+                    if self._movementDrawError ~= message then
+                        self._movementDrawError = message
+                        print("[rgnMovement] main Draw hook error: " .. message)
+                    end
+                end
+            end
+            if type(self._killsayDrawCallback) == "function" then
+                local ok, err = pcall(self._killsayDrawCallback)
+                self._killsayDrawAliveAt = t
+                if ok then
+                    self._killsayDrawError = nil
+                else
+                    local message = tostring(err)
+                    if self._killsayDrawError ~= message then
+                        self._killsayDrawError = message
+                        print("[rgnKillsay] main Draw hook error: " .. message)
+                    end
+                end
+            end
+        end
+
+        if not open and self._t < 0.005 and #self._toasts == 0 then
+            drawMovementOverlay()
+            self._t = 0
+            return
+        end
 
         updateMouse()
         pcall(function() self:_drawToasts() end)
@@ -2059,14 +2138,32 @@ function M:Build(opts)
         ALPHA = 1
         for _, fn in ipairs(self._onframe) do pcall(fn, UI) end
 
-        if not open and self._t < 0.005 then self._t = 0; return end
+        if not open and self._t < 0.005 then
+            drawMovementOverlay()
+            self._t = 0
+            return
+        end
 
         local ok, err = pcall(function() self:_frame() end)
         if not ok then print("[rgnMultitool] frame error: " .. tostring(err)) end
+        drawMovementOverlay()
     end)
 
     pcall(function()
         callbacks.Register("CreateMove", "rgnMultitool_UIInput", function(cmd)
+        if cmd and type(M._movementCommandCallback) == "function" then
+            local ok, err = pcall(M._movementCommandCallback, cmd)
+            M._movementCommandAliveAt = now()
+            if ok then
+                M._movementCommandError = nil
+            else
+                local message = tostring(err)
+                if M._movementCommandError ~= message then
+                    M._movementCommandError = message
+                    print("[rgnMovement] main CreateMove hook error: " .. message)
+                end
+            end
+        end
         if not (M._open and M._focus) or not cmd then return end
         pcall(function() cmd.forwardmove = 0 end)
         pcall(function() cmd.sidemove = 0 end)
@@ -2445,22 +2542,26 @@ else
             client.AllowListener("player_team")
             client.AllowListener("round_start")
             client.AllowListener("game_newmap")
+            client.AllowListener("server_spawn")
             client.AllowListener("cs_game_disconnected")
         end
     end)
 
     pcall(function()
         callbacks.Register("FireGameEvent", "rgnMultitool_SkinsEvents", function(event)
+
             local name
             pcall(function() name = event:GetName() end)
-            if name == "game_newmap" or name == "cs_game_disconnected" then
+            if name == "game_newmap" or name == "server_spawn" or name == "cs_game_disconnected" then
                 applyAt, pendingReason, pendingFreshPawn = nil, nil, false
                 finalizingRefresh = false
                 wasAlive = nil
                 lastPawnKey, lastAppliedKey, lastAppliedAt = nil, nil, -100000
             end
-            if name == "round_start" or name == "game_newmap" then
-                scheduleApply(name == "game_newmap" and "new map detected" or "round detected", true, ROUND_DELAY)
+            if name == "round_start" or name == "game_newmap" or name == "server_spawn" then
+                local reason = name == "server_spawn" and "new server detected"
+                    or (name == "game_newmap" and "new map detected" or "round detected")
+                scheduleApply(reason, true, ROUND_DELAY)
             elseif name == "player_spawn" and isLocalEvent(event) then
                 scheduleApply("local spawn event", true)
             elseif name == "player_team" and isLocalEvent(event) then
@@ -5837,6 +5938,101 @@ callbacks.Register("CreateMove", "rgnMultitool_WeaponsEngine", function()
                                             apply_viewmodel_mesh(wpn, mask, elist, false, pawn)
                                         end
                                     end]])
+    -- LOCAL TEST: explicitly invalidate only runtime caches when the session
+    -- changes. Saved weapon/agent/glove selections remain untouched.
+    local okLocalSessionRun, okLocalSessionClock, okLocalSessionEvents
+    source, okLocalSessionRun = replaceLiteral(source, [[local function run()
+
+    local lp = get_live_local()
+    if not lp or not in_game() then
+        if next(state.applied) then state.applied = {} end
+        state.rgnWasAlive = false
+        return
+    end]], [[local rgnSessionInGame = false
+local function rgnResetSession(reason)
+    local resetNow = now_s()
+    state.applied = {}
+    state.modelApplied = {}
+    state.appliedLocalModel = nil
+    state.rgnWasAlive = false
+    state.lastPawnHandle = nil
+    state.lastTeam = nil
+    state.rgnLastActiveDef = nil
+    state.rgnStickyNext = 0
+    state.rgnRespawnRetries = 6
+    state.rgnRespawnNext = resetNow + 0.15
+    state.rgnMaterialRetries = 5
+    state.rgnMaterialNext = resetNow + 0.20
+    state.modelNextTry = {}
+    state.modelNextGlobal = 0
+    glove_key, glove_apply, glove_next, glove_repair_after = nil, 0, 0, 0
+    g_activeDef = nil
+    g_precached_paths = {}
+    if reason ~= "round_start" then
+        print("[rgnWEAPONS engine] session cache reset: " .. tostring(reason or "transition"))
+    end
+end
+
+local function run()
+    local sessionOnline = in_game()
+    if not sessionOnline then
+        if rgnSessionInGame then rgnResetSession("left game") end
+        rgnSessionInGame = false
+        if next(state.applied) then state.applied = {} end
+        state.rgnWasAlive = false
+        return
+    end
+    if not rgnSessionInGame then
+        rgnSessionInGame = true
+        rgnResetSession("entered game")
+    end
+
+    local lp = get_live_local()
+    if not lp then
+        if next(state.applied) then state.applied = {} end
+        state.rgnWasAlive = false
+        return
+    end]])
+
+    source, okLocalSessionClock = replaceLiteral(source, [[local rgnNextEngineTick = 0
+callbacks.Register("CreateMove", "rgnMultitool_WeaponsEngine", function()
+    local tickNow = now_s()
+    if tickNow < rgnNextEngineTick then return end]], [[local rgnNextEngineTick = 0
+local rgnLastEngineClock = 0
+callbacks.Register("CreateMove", "rgnMultitool_WeaponsEngine", function()
+    local tickNow = now_s()
+    if tickNow + 0.25 < rgnLastEngineClock then
+        rgnNextEngineTick = 0
+        rgnSessionInGame = false
+        rgnResetSession("clock rollback / map load")
+    end
+    rgnLastEngineClock = tickNow
+    if tickNow < rgnNextEngineTick then return end]])
+
+    source, okLocalSessionEvents = replaceLiteral(source, [[local rgnNextEngineTick = 0
+local rgnLastEngineClock = 0]], [[pcall(function()
+    if client and client.AllowListener then
+        client.AllowListener("server_spawn")
+        client.AllowListener("game_newmap")
+        client.AllowListener("cs_game_disconnected")
+        client.AllowListener("round_start")
+    end
+    callbacks.Register("FireGameEvent", "rgnMultitool_WeaponsSessionEvents", function(event)
+        local name
+        pcall(function() name = event:GetName() end)
+        if name == "server_spawn" or name == "game_newmap" or name == "cs_game_disconnected" or name == "round_start" then
+            if name ~= "round_start" then rgnSessionInGame = false end
+            rgnResetSession(name)
+        end
+    end)
+end)
+
+local rgnNextEngineTick = 0
+local rgnLastEngineClock = 0]])
+
+    if not (okLocalSessionRun and okLocalSessionClock and okLocalSessionEvents) then
+        return nil, "local session lifecycle patch refused"
+    end
     source = source:gsub("%[changer%]", "[rgnWEAPONS engine]")
     if not (okConfig and okCallback and okRuntime and okNetworkedAttributesOffset
         and okAttributesInitializedOffset and okFullItemIDOffset
@@ -5947,6 +6143,7 @@ if C then
     end
     if #missing > 0 then
         pcall(callbacks.Unregister, "CreateMove", "rgnMultitool_WeaponsEngine")
+        pcall(callbacks.Unregister, "FireGameEvent", "rgnMultitool_WeaponsSessionEvents")
         engineError = "current offsets unavailable: " .. table.concat(missing, ", ")
         C = nil
     end
@@ -6400,6 +6597,7 @@ end)
 pcall(function()
     callbacks.Register("Unload", "rgnMultitool_WeaponsUnload", function()
         pcall(callbacks.Unregister, "CreateMove", "rgnMultitool_WeaponsEngine")
+        pcall(callbacks.Unregister, "FireGameEvent", "rgnMultitool_WeaponsSessionEvents")
 
     end)
 end)
@@ -6408,8 +6606,2790 @@ end)
 print("[rgnWEAPONS] loaded | engine=" .. (C and ("ready from " .. tostring(engineWhere)) or tostring(engineError)))
 end)
 
+loadModule("MOVEMENT", function()
+local M = M
+
+-- rgnMultitool movement module. Movement is attached to the multitool's
+-- already-live Draw/CreateMove callbacks so Aimware cannot discard it as a
+-- second callback for the same event.
+local bitlib = rawget(_G, "bit")
+-- v2 starts with every feature disabled; choices are persisted after opt-in.
+local CONFIG_FILE = "rgnmovement_config_v2.txt"
+local IN_DUCK = 4
+local FL_ONGROUND = 1
+local KEY_W, KEY_A, KEY_S, KEY_D = 0x57, 0x41, 0x53, 0x44
+
+local function clamp(v, lo, hi)
+    if v < lo then return lo elseif v > hi then return hi end
+    return v
+end
+
+local function now()
+    local value
+    pcall(function() value = globals.RealTime() end)
+    if type(value) ~= "number" then pcall(function() value = globals.CurTime() end) end
+    return type(value) == "number" and value or 0
+end
+
+local function tickInterval()
+    local value
+    pcall(function() value = globals.TickInterval() end)
+    if type(value) ~= "number" or value <= 0 or value > 0.1 then return 1 / 64 end
+    return value
+end
+
+local function hasBit(value, mask)
+    value = tonumber(value) or 0
+    if bitlib and bitlib.band then return bitlib.band(value, mask) ~= 0 end
+    return value % (mask * 2) >= mask
+end
+
+local function addBit(value, mask)
+    value = tonumber(value) or 0
+    if bitlib and bitlib.bor then return bitlib.bor(value, mask) end
+    return hasBit(value, mask) and value or (value + mask)
+end
+
+local errors = {}
+local function safe(label, fn, ...)
+    local ok, a, b, c = pcall(fn, ...)
+    if not ok then
+        local key = label .. ":" .. tostring(a)
+        if not errors[key] then
+            errors[key] = true
+            print("[rgnMovement] " .. label .. " error: " .. tostring(a))
+        end
+        return nil
+    end
+    return a, b, c
+end
+
+local config = {}
+pcall(function()
+    local f = file.Open(CONFIG_FILE, "r")
+    if not f then return end
+    local raw = f:Read() or ""
+    f:Close()
+    for line in raw:gmatch("[^\r\n]+") do
+        local key, value = line:match("^([%w_]+)=(.*)$")
+        if key then config[key] = value end
+    end
+end)
+
+local function cfgBool(key, default)
+    local value = config[key]
+    if value == nil then return default end
+    return value == "1" or value == "true"
+end
+
+local function cfgNumber(key, default, lo, hi)
+    local value = tonumber(config[key]) or default
+    return clamp(value, lo, hi)
+end
+
+local function cfgColor(key, default)
+    local value = config[key]
+    if not value then return default end
+    local r, g, b, a = value:match("^(%d+),(%d+),(%d+),(%d+)$")
+    if not r then return default end
+    return {
+        clamp(tonumber(r), 0, 255), clamp(tonumber(g), 0, 255),
+        clamp(tonumber(b), 0, 255), clamp(tonumber(a), 0, 255)
+    }
+end
+
+local tab = M:Tab("MOVEMENT")
+tab:Row()
+local velocitySection = tab:Section("Velocity display")
+local velocityEnabled = velocitySection:Checkbox("Enable velocity number", cfgBool("velocity", false))
+local velocityColor = velocitySection:ColorPicker("Number color", cfgColor("velocity_color", { 245, 248, 255, 255 }))
+local jumpColor = velocitySection:ColorPicker("Jump-speed color", cfgColor("jump_color", { 74, 166, 255, 255 }))
+local velocityY = velocitySection:Slider("Vertical position", cfgNumber("velocity_y", 83, 55, 94), 55, 94, 1, "%d%%")
+
+local trailSection = tab:Section("Jump trail")
+local trailEnabled = trailSection:Checkbox("Enable jump trail", cfgBool("trail", false))
+local trailDuration = trailSection:Slider("Duration", cfgNumber("trail_duration", 4, 1, 10), 1, 10, 0.5, "%.1fs")
+local trailThickness = trailSection:Slider("Thickness", cfgNumber("trail_thickness", 3, 1, 8), 1, 8, 1)
+local trailRainbow = trailSection:Checkbox("RGB rainbow", cfgBool("trail_rainbow", false))
+local trailColor = trailSection:ColorPicker("Trail color", cfgColor("trail_color", { 74, 166, 255, 230 }))
+
+tab:Col()
+local edgeSection = tab:Section("Prediction edge bug")
+local edgeEnabled = edgeSection:Checkbox("Enable smart edge bug", cfgBool("edge", false))
+local edgeKey = edgeSection:Keybox("Activation key", cfgNumber("edge_key", 0, 0, 255))
+local edgeMode = edgeSection:Combo("Activation mode", { "Hold", "Toggle" }, cfgNumber("edge_mode", 1, 1, 2))
+
+local nullSection = tab:Section("Null binds")
+local nullEnabled = nullSection:Checkbox("Enable W/A/S/D resolver", cfgBool("null_binds", false))
+
+local statusSection = tab:Section("Status")
+local debugEnabled = statusSection:Checkbox("Live debug overlay", cfgBool("debug", false))
+
+local vectorMode
+local function vecComponent(v, axis)
+    if v == nil then return nil end
+    local methods = {
+        function() return v[axis] end,
+        function() return v[axis == "x" and 1 or (axis == "y" and 2 or 3)] end,
+        function() return v[axis == "x" and 0 or (axis == "y" and 1 or 2)] end,
+        function() return v["Get" .. axis:upper()](v) end,
+    }
+    if vectorMode then
+        local ok, value = pcall(methods[vectorMode])
+        value = ok and tonumber(value) or nil
+        if value ~= nil then return value end
+        vectorMode = nil
+    end
+    for i = 1, #methods do
+        local ok, value = pcall(methods[i])
+        value = ok and tonumber(value) or nil
+        if value ~= nil then vectorMode = i; return value end
+    end
+    local text = tostring(v)
+    local x, y, z = text:match("([%-%d%.eE+]+)[ ,]+([%-%d%.eE+]+)[ ,]+([%-%d%.eE+]+)")
+    return tonumber(axis == "x" and x or (axis == "y" and y or z))
+end
+
+local function vectorXYZ(v)
+    local x, y, z = vecComponent(v, "x"), vecComponent(v, "y"), vecComponent(v, "z")
+    if x == nil or y == nil or z == nil then return nil end
+    return x, y, z
+end
+
+local velocityReader, flagsReader, moveTypeReader
+local velocitySource, flagsSource, moveTypeSource = "origin delta", "fallback", "fallback"
+
+local function readVelocity(lp)
+    if velocityReader == false then return nil end
+    local readers = {
+        { "m_vecAbsVelocity/GetFieldVector", function(e) return e:GetFieldVector("m_vecAbsVelocity") end },
+        { "m_vecVelocity/GetFieldVector", function(e) return e:GetFieldVector("m_vecVelocity") end },
+        { "m_vecAbsVelocity/GetField", function(e) return e:GetField("m_vecAbsVelocity") end },
+        { "m_vecVelocity/GetField", function(e) return e:GetField("m_vecVelocity") end },
+    }
+    if type(velocityReader) == "number" then
+        local ok, value = pcall(readers[velocityReader][2], lp)
+        if ok and value ~= nil then
+            local x, y, z = vectorXYZ(value)
+            if x then return x, y, z end
+        end
+        velocityReader = nil
+    end
+    for i = 1, #readers do
+        local ok, value = pcall(readers[i][2], lp)
+        if ok and value ~= nil then
+            local x, y, z = vectorXYZ(value)
+            if x then
+                velocityReader, velocitySource = i, readers[i][1]
+                return x, y, z
+            end
+        end
+    end
+    velocityReader = false
+    velocitySource = "origin delta"
+    return nil
+end
+
+local function readInteger(lp, property, cacheName)
+    local cache
+    if cacheName == "flags" then cache = flagsReader else cache = moveTypeReader end
+    if cache == false then return nil end
+    local readers = {
+        { property .. "/GetFieldInt", function(e) return e:GetFieldInt(property) end },
+        { property .. "/GetField", function(e) return e:GetField(property) end },
+        { property .. "/GetPropInt", function(e) return e:GetPropInt(property) end },
+    }
+    local function accept(i, value)
+        value = tonumber(value)
+        if value == nil then return nil end
+        if cacheName == "flags" then flagsReader, flagsSource = i, readers[i][1]
+        else moveTypeReader, moveTypeSource = i, readers[i][1] end
+        return value
+    end
+    if type(cache) == "number" then
+        local ok, value = pcall(readers[cache][2], lp)
+        if ok then
+            value = accept(cache, value)
+            if value ~= nil then return value end
+        end
+        if cacheName == "flags" then flagsReader = nil else moveTypeReader = nil end
+    end
+    for i = 1, #readers do
+        local ok, value = pcall(readers[i][2], lp)
+        if ok then
+            value = accept(i, value)
+            if value ~= nil then return value end
+        end
+    end
+    if cacheName == "flags" then flagsReader, flagsSource = false, "fallback"
+    else moveTypeReader, moveTypeSource = false, "fallback" end
+    return nil
+end
+
+local function readMoveType(lp)
+    if moveTypeReader == false then return nil end
+    local readers = {
+        { "m_MoveType/GetFieldInt", function(e) return e:GetFieldInt("m_MoveType") end },
+        { "m_nActualMoveType/GetFieldInt", function(e) return e:GetFieldInt("m_nActualMoveType") end },
+        { "m_nMoveType/GetFieldInt", function(e) return e:GetFieldInt("m_nMoveType") end },
+        { "m_MoveType/GetField", function(e) return e:GetField("m_MoveType") end },
+        { "m_MoveType/GetPropInt", function(e) return e:GetPropInt("m_MoveType") end },
+    }
+    if type(moveTypeReader) == "number" then
+        local ok, value = pcall(readers[moveTypeReader][2], lp)
+        value = ok and tonumber(value) or nil
+        if value ~= nil then return value end
+        moveTypeReader = nil
+    end
+    for i = 1, #readers do
+        local ok, value = pcall(readers[i][2], lp)
+        value = ok and tonumber(value) or nil
+        if value ~= nil then
+            moveTypeReader, moveTypeSource = i, readers[i][1]
+            return value
+        end
+    end
+    moveTypeReader, moveTypeSource = false, "fallback"
+    return nil
+end
+
+local state = {
+    valid = false, alive = false, speed = 0, displaySpeed = 0,
+    x = 0, y = 0, z = 0, vx = 0, vy = 0, vz = 0,
+    onGround = true, onLadder = false, groundDistance = nil,
+    jumpSpeed = nil, jumpActive = false, jumpLandedAt = 0,
+    edgeActive = false, edgeDuck = false,
+}
+
+local lastX, lastY, lastZ, lastSampleAt, lastPawnKey
+local lastGround = true
+local trail, trailHead, lastTrailAt = {}, 1, 0
+local edgeBind = { last = false, toggled = false }
+local nullState = { w = false, a = false, s = false, d = false, stamp = 0, pressed = {} }
+local traceSource = "not probed"
+
+local function clearTrail()
+    trail, trailHead, lastTrailAt = {}, 1, 0
+end
+
+local function resetMovement(reason)
+    state.valid, state.alive = false, false
+    state.speed, state.displaySpeed = 0, 0
+    state.groundDistance = nil
+    state.edgeActive, state.edgeDuck = false, false
+    state.jumpSpeed, state.jumpActive, state.jumpLandedAt = nil, false, 0
+    lastX, lastY, lastZ, lastSampleAt, lastPawnKey = nil, nil, nil, nil, nil
+    lastGround = true
+    edgeBind.last, edgeBind.toggled = false, false
+    velocityReader, flagsReader, moveTypeReader = nil, nil, nil
+    velocitySource, flagsSource, moveTypeSource = "origin delta", "fallback", "fallback"
+    traceSource = "not probed"
+    clearTrail()
+    if reason and reason ~= "player_spawn" then
+        print("[rgnMovement] state reset: " .. tostring(reason))
+    end
+end
+
+local function playerKey(lp)
+    local index
+    pcall(function() index = lp:GetIndex() end)
+    return tostring(index or lp)
+end
+
+local function tracePoint(lp, x, y, z, maxDistance)
+    if not engine or type(engine.TraceLine) ~= "function" or type(Vector3) ~= "function" then
+        traceSource = "TraceLine unavailable"
+        return nil
+    end
+    local distance
+    local ok = pcall(function()
+        local start = Vector3(x, y, z + 2)
+        local finish = Vector3(x, y, z - maxDistance)
+        local tr = engine.TraceLine(start, finish)
+        if not tr or tr.startsolid or tr.allSolid then return end
+        local fraction = tonumber(tr.fraction)
+        if not fraction or fraction < 0 or fraction >= 1 then return end
+        local hitLocal = false
+        pcall(function() hitLocal = tr.entity ~= nil and tr.entity:GetIndex() == lp:GetIndex() end)
+        if hitLocal then return end
+        distance = math.max(0, (maxDistance + 2) * fraction - 2)
+    end)
+    if not ok then
+        traceSource = "TraceLine error"
+        return nil
+    end
+    traceSource = "5-point TraceLine"
+    return distance
+end
+
+local function groundDistance(lp, x, y, z)
+    local half, maxDistance = 15, 96
+    local points = { { 0, 0 }, { -half, -half }, { -half, half }, { half, -half }, { half, half } }
+    local best
+    for i = 1, #points do
+        local distance = tracePoint(lp, x + points[i][1], y + points[i][2], z, maxDistance)
+        if distance and (not best or distance < best) then best = distance end
+    end
+    return best
+end
+
+local function edgeBindingActive()
+    if not edgeEnabled:Get() then
+        edgeBind.last, edgeBind.toggled = false, false
+        return false
+    end
+    local key = tonumber(edgeKey:Get()) or 0
+    if key <= 0 then return false end
+    local down = false
+    pcall(function() down = input.IsButtonDown(key) and true or false end)
+    local rising = down and not edgeBind.last
+    edgeBind.last = down
+    if edgeMode:Get() == 2 then
+        if rising then edgeBind.toggled = not edgeBind.toggled end
+        return edgeBind.toggled
+    end
+    return down
+end
+
+local function updateState(edgeActive)
+    local lp
+    pcall(function() lp = entities.GetLocalPlayer() end)
+    if not lp then
+        if state.valid then resetMovement("no local player") end
+        return false
+    end
+    local alive = false
+    pcall(function() alive = lp:IsAlive() and true or false end)
+    if not alive then
+        if state.alive then resetMovement("death") end
+        state.alive = false
+        return false
+    end
+
+    local origin
+    pcall(function() origin = lp:GetAbsOrigin() end)
+    local x, y, z = vectorXYZ(origin)
+    if not x then
+        state.valid = false
+        return false
+    end
+
+    local key = playerKey(lp)
+    if lastPawnKey and key ~= lastPawnKey then resetMovement("pawn changed") end
+    lastPawnKey = key
+
+    local t = now()
+    local previousZ = lastZ
+    local vx, vy, vz = readVelocity(lp)
+    if vx == nil then
+        local dt = lastSampleAt and (t - lastSampleAt) or tickInterval()
+        if lastX and dt > 0 and dt <= 0.1 then
+            vx, vy, vz = (x - lastX) / dt, (y - lastY) / dt, (z - lastZ) / dt
+        else
+            vx, vy, vz = 0, 0, 0
+        end
+    end
+    lastX, lastY, lastZ, lastSampleAt = x, y, z, t
+
+    local flags = readInteger(lp, "m_fFlags", "flags")
+    local moveType = readMoveType(lp)
+    local onGround
+    if flags ~= nil then
+        onGround = hasBit(flags, FL_ONGROUND)
+    else
+        local closeGround
+        if math.abs(vz) < 40 then closeGround = tracePoint(lp, x, y, z, 8) end
+        onGround = closeGround ~= nil and closeGround <= 3
+        if closeGround == nil and previousZ ~= nil then
+            onGround = lastGround and math.abs(vz) < 25 and math.abs(z - previousZ) < 0.05
+        end
+    end
+    local onLadder = moveType == 9
+    local speed = math.sqrt(vx * vx + vy * vy)
+    if speed > 5000 then speed = 0 end
+
+    state.valid, state.alive = true, true
+    state.x, state.y, state.z = x, y, z
+    state.vx, state.vy, state.vz = vx, vy, vz
+    state.speed, state.onGround, state.onLadder = speed, onGround, onLadder
+    if speed >= state.displaySpeed then state.displaySpeed = speed
+    else state.displaySpeed = state.displaySpeed + (speed - state.displaySpeed) * 0.22 end
+
+    local tookOff = lastGround and not onGround and vz > 80
+    if not tookOff and not state.jumpActive and vz > 150 and vz < 420 then tookOff = true end
+    if tookOff then
+        state.jumpSpeed, state.jumpActive, state.jumpLandedAt = speed, true, 0
+        clearTrail()
+    elseif state.jumpActive and onGround then
+        state.jumpActive, state.jumpLandedAt = false, t
+    end
+    if state.jumpSpeed and state.jumpLandedAt > 0 and t - state.jumpLandedAt > 3 then
+        state.jumpSpeed, state.jumpLandedAt = nil, 0
+    end
+    lastGround = onGround
+
+    if edgeActive and not onGround and not onLadder and vz < -80 then
+        state.groundDistance = groundDistance(lp, x, y, z)
+    else
+        state.groundDistance = nil
+    end
+    return true
+end
+
+local function shouldDuck()
+    if not state.valid or state.onGround or state.onLadder or state.vz >= -80 then return false end
+    local distance = state.groundDistance
+    if not distance then return false end
+    local fallSpeed = -state.vz
+    local gravity = 800
+    local discriminant = fallSpeed * fallSpeed + 2 * gravity * distance
+    if discriminant < 0 then return false end
+    local seconds = (-fallSpeed + math.sqrt(discriminant)) / gravity
+    local ticks = seconds / tickInterval()
+    return ticks >= 0 and ticks <= 1.65
+end
+
+local function applyEdgeBug(cmd, active)
+    if not active or not shouldDuck() or not cmd then return false end
+    local buttons
+    pcall(function() buttons = cmd:GetButtons() end)
+    if type(buttons) == "number" then
+        local ok = pcall(function() cmd:SetButtons(addBit(buttons, IN_DUCK)) end)
+        return ok
+    end
+    return false
+end
+
+local function keyDown(code)
+    local down = false
+    pcall(function() down = input.IsButtonDown(code) and true or false end)
+    return down
+end
+
+local function updateNullPresses(w, a, s, d)
+    local current = { w = w, a = a, s = s, d = d }
+    for key, down in pairs(current) do
+        if down and not nullState[key] then
+            nullState.stamp = nullState.stamp + 1
+            nullState.pressed[key] = nullState.stamp
+        end
+        nullState[key] = down
+    end
+end
+
+local function applyNullBinds(cmd)
+    if not nullEnabled:Get() or not cmd then return end
+    local w, a, s, d = keyDown(KEY_W), keyDown(KEY_A), keyDown(KEY_S), keyDown(KEY_D)
+    updateNullPresses(w, a, s, d)
+    if w and s then
+        local magnitude = 450
+        pcall(function() magnitude = math.abs(cmd:GetForwardMove() or 0) end)
+        if magnitude < 10 then magnitude = 450 end
+        local forward = (nullState.pressed.w or 0) >= (nullState.pressed.s or 0)
+        pcall(function() cmd:SetForwardMove(forward and magnitude or -magnitude) end)
+    end
+    if a and d then
+        local magnitude = 450
+        pcall(function() magnitude = math.abs(cmd:GetSideMove() or 0) end)
+        if magnitude < 10 then magnitude = 450 end
+        local right = (nullState.pressed.d or 0) >= (nullState.pressed.a or 0)
+        pcall(function() cmd:SetSideMove(right and magnitude or -magnitude) end)
+    end
+end
+
+local function trimTrail(t)
+    local life = tonumber(trailDuration:Get()) or 4
+    while trailHead <= #trail and t - trail[trailHead].t > life do trailHead = trailHead + 1 end
+    if trailHead > 96 then
+        local compact = {}
+        for i = trailHead, #trail do compact[#compact + 1] = trail[i] end
+        trail, trailHead = compact, 1
+    end
+end
+
+local function updateTrail(t)
+    if not trailEnabled:Get() then
+        if #trail > 0 then clearTrail() end
+        return
+    end
+    trimTrail(t)
+    if not state.valid or not state.jumpActive or t - lastTrailAt < 0.025 then return end
+    lastTrailAt = t
+    trail[#trail + 1] = { x = state.x, y = state.y, z = state.z + 3, t = t }
+    if #trail - trailHead > 255 then trailHead = trailHead + 1 end
+end
+
+local function hsvToRgb(h)
+    local i = math.floor(h * 6)
+    local f = h * 6 - i
+    local q, t = 1 - f, f
+    local m = i % 6
+    local r, g, b
+    if m == 0 then r, g, b = 1, t, 0
+    elseif m == 1 then r, g, b = q, 1, 0
+    elseif m == 2 then r, g, b = 0, 1, t
+    elseif m == 3 then r, g, b = 0, q, 1
+    elseif m == 4 then r, g, b = t, 0, 1
+    else r, g, b = 1, 0, q end
+    return math.floor(r * 255), math.floor(g * 255), math.floor(b * 255)
+end
+
+local velocityFont, smallFont
+pcall(function()
+    velocityFont = draw.CreateFont("Segoe UI", 42, 700)
+    smallFont = draw.CreateFont("Segoe UI", 18, 600)
+end)
+
+local function drawVelocity()
+    if not velocityEnabled:Get() or not state.valid then return end
+    local sw, sh = draw.GetScreenSize()
+    if not sw or not sh then return end
+    if velocityFont then draw.SetFont(velocityFont) end
+    local value = tostring(math.floor(state.displaySpeed + 0.5))
+    local tw, th = draw.GetTextSize(value)
+    local x = math.floor(sw * 0.5 - (tw or 0) * 0.5)
+    local y = math.floor(sh * (velocityY:Get() / 100) - (th or 0) * 0.5)
+    draw.Color(0, 0, 0, 210); draw.Text(x + 2, y + 2, value)
+    local color = velocityColor:Get()
+    draw.Color(color[1], color[2], color[3], color[4]); draw.Text(x, y, value)
+
+    if state.jumpSpeed then
+        if smallFont then draw.SetFont(smallFont) end
+        local jump = string.format("( %d )", math.floor(state.jumpSpeed + 0.5))
+        local jw = select(1, draw.GetTextSize(jump)) or 0
+        local alpha = 255
+        if state.jumpLandedAt > 0 then alpha = math.floor(255 * clamp(3 - (now() - state.jumpLandedAt), 0, 1)) end
+        local jc = jumpColor:Get()
+        draw.Color(0, 0, 0, math.floor(alpha * 0.8)); draw.Text(sw * 0.5 - jw * 0.5 + 1, y + (th or 38) + 5, jump)
+        draw.Color(jc[1], jc[2], jc[3], math.min(jc[4], alpha)); draw.Text(sw * 0.5 - jw * 0.5, y + (th or 38) + 4, jump)
+    end
+end
+
+local function project(point)
+    local sx, sy
+    local ok = pcall(function() sx, sy = client.WorldToScreen(Vector3(point.x, point.y, point.z)) end)
+    if ok and sx and sy then return sx, sy end
+end
+
+local function drawTrail()
+    if not trailEnabled:Get() or trailHead >= #trail then return end
+    local t = now()
+    local life = tonumber(trailDuration:Get()) or 4
+    local thickness = math.floor(tonumber(trailThickness:Get()) or 3)
+    local base = trailColor:Get()
+    local rainbow = trailRainbow:Get()
+    local previousX, previousY
+    for i = trailHead, #trail do
+        local point = trail[i]
+        local x, y = project(point)
+        if x and previousX then
+            local age = t - point.t
+            local fade = clamp(1 - age / life, 0, 1)
+            if fade > 0 then
+                local r, g, b = base[1], base[2], base[3]
+                if rainbow then r, g, b = hsvToRgb((t * 0.16 + i * 0.025) % 1) end
+                local dx, dy = x - previousX, y - previousY
+                local length = math.sqrt(dx * dx + dy * dy)
+                if length > 0.5 then
+                    local nx, ny = -dy / length, dx / length
+                    local half = math.floor(thickness * 0.5)
+                    draw.Color(r, g, b, math.floor((base[4] or 230) * fade * 0.24))
+                    for offset = -half, half, 2 do
+                        local ox, oy = math.floor(nx * offset + 0.5), math.floor(ny * offset + 0.5)
+                        draw.Line(previousX + ox, previousY + oy, x + ox, y + oy)
+                    end
+                    draw.Color(math.min(255, r + 45), math.min(255, g + 45), math.min(255, b + 45), math.floor((base[4] or 230) * fade))
+                    draw.Line(previousX, previousY, x, y)
+                end
+            end
+        end
+        previousX, previousY = x, y
+    end
+end
+
+local moveRegistered, moveActiveEvent, lastMovementAt = "main hook ready", nil, nil
+local function drawDebug()
+    if not debugEnabled:Get() then return end
+    if smallFont then draw.SetFont(smallFont) end
+    local lines = {
+        string.format("rgnMovement | valid=%s speed=%.1f vz=%.1f", tostring(state.valid), state.speed, state.vz),
+        string.format("move callback=%s age=%s", tostring(moveActiveEvent or moveRegistered or "none"), lastMovementAt and string.format("%.2fs", math.max(0, now() - lastMovementAt)) or "never"),
+        string.format("ground=%s ladder=%s distance=%s", tostring(state.onGround), tostring(state.onLadder), state.groundDistance and string.format("%.1f", state.groundDistance) or "nil"),
+        string.format("edge active=%s inject duck=%s", tostring(state.edgeActive), tostring(state.edgeDuck)),
+        "velocity: " .. velocitySource,
+        "flags: " .. flagsSource .. " | movetype: " .. moveTypeSource,
+        "trace: " .. traceSource,
+    }
+    local x, y = 18, 180
+    draw.Color(8, 10, 14, 210); draw.FilledRect(x - 8, y - 8, x + 470, y + #lines * 20 + 8)
+    for i = 1, #lines do
+        draw.Color(i == 1 and 74 or 205, i == 1 and 166 or 213, 255, 255)
+        draw.Text(x, y + (i - 1) * 20, lines[i])
+    end
+end
+
+local function colorText(c) return table.concat({ c[1], c[2], c[3], c[4] }, ",") end
+local function settingsSnapshot()
+    return table.concat({
+        velocityEnabled:Get() and "1" or "0", colorText(velocityColor:Get()), colorText(jumpColor:Get()), velocityY:Get(),
+        trailEnabled:Get() and "1" or "0", trailDuration:Get(), trailThickness:Get(), trailRainbow:Get() and "1" or "0", colorText(trailColor:Get()),
+        edgeEnabled:Get() and "1" or "0", edgeKey:Get(), edgeMode:Get(), nullEnabled:Get() and "1" or "0", debugEnabled:Get() and "1" or "0"
+    }, "|")
+end
+
+local function saveSettings()
+    pcall(function()
+        local f = file.Open(CONFIG_FILE, "w")
+        if not f then return end
+        local lines = {
+            "velocity=" .. (velocityEnabled:Get() and "1" or "0"),
+            "velocity_color=" .. colorText(velocityColor:Get()),
+            "jump_color=" .. colorText(jumpColor:Get()),
+            "velocity_y=" .. tostring(velocityY:Get()),
+            "trail=" .. (trailEnabled:Get() and "1" or "0"),
+            "trail_duration=" .. tostring(trailDuration:Get()),
+            "trail_thickness=" .. tostring(trailThickness:Get()),
+            "trail_rainbow=" .. (trailRainbow:Get() and "1" or "0"),
+            "trail_color=" .. colorText(trailColor:Get()),
+            "edge=" .. (edgeEnabled:Get() and "1" or "0"),
+            "edge_key=" .. tostring(edgeKey:Get()),
+            "edge_mode=" .. tostring(edgeMode:Get()),
+            "null_binds=" .. (nullEnabled:Get() and "1" or "0"),
+            "debug=" .. (debugEnabled:Get() and "1" or "0"),
+        }
+        f:Write(table.concat(lines, "\n"))
+        f:Close()
+    end)
+end
+
+statusSection:Button("Show movement engine status", function()
+    local moveStatus = moveActiveEvent or moveRegistered or "not connected"
+    local drawAge = M._movementDrawAliveAt and math.max(0, now() - M._movementDrawAliveAt) or nil
+    local drawStatus = M._movementDrawError and "draw=error" or (drawAge and string.format("draw=live %.2fs", drawAge) or "draw=waiting")
+    M:Notify(string.format("move=%s | %s | velocity=%s | flags=%s | trace=%s", moveStatus, drawStatus, velocitySource, flagsSource, traceSource), "info")
+end)
+statusSection:Button("Reset movement state", function()
+    resetMovement("manual reset")
+    M:Notify("movement state reset", "success")
+end)
+
+pcall(function()
+    callbacks.Unregister("PreMove", "rgnMultitool_MovementPreMove")
+    callbacks.Unregister("CreateMove", "rgnMultitool_MovementCreateMove")
+    callbacks.Unregister("Draw", "rgnMultitool_MovementDraw")
+    callbacks.Unregister("FireGameEvent", "rgnMultitool_MovementEvents")
+    callbacks.Unregister("Unload", "rgnMultitool_MovementUnload")
+end)
+
+local function onMovementCommand(cmd)
+    local edgeActive = edgeBindingActive()
+    state.edgeActive = edgeActive
+    local needsState = velocityEnabled:Get() or trailEnabled:Get() or edgeActive or debugEnabled:Get()
+    if needsState then safe("state", updateState, edgeActive) end
+    state.edgeDuck = safe("edge bug", applyEdgeBug, cmd, edgeActive) and true or false
+    safe("null binds", applyNullBinds, cmd)
+    if needsState then safe("jump trail", updateTrail, now()) end
+end
+
+M._movementCommandCallback = function(cmd)
+    moveActiveEvent, lastMovementAt = "Main/CreateMove", now()
+    onMovementCommand(cmd)
+end
+
+local observedSettings = settingsSnapshot()
+local dirtyAt, nextSettingsPoll = nil, 0
+M._movementDrawCallback = function()
+    local t = now()
+    -- Visual fallback: state still updates when an injector accepts CreateMove
+    -- registration but never dispatches it. Command mutations remain confined
+    -- to the real CreateMove hook below.
+    if not lastMovementAt or t - lastMovementAt > 0.20 then
+        local needsState = velocityEnabled:Get() or trailEnabled:Get() or debugEnabled:Get()
+        if needsState then
+            safe("draw state fallback", updateState, false)
+            safe("draw trail fallback", updateTrail, t)
+        end
+    end
+    safe("velocity draw", drawVelocity)
+    safe("trail draw", drawTrail)
+    safe("debug draw", drawDebug)
+    if t >= nextSettingsPoll then
+        nextSettingsPoll = t + 0.25
+        local snapshot = settingsSnapshot()
+        if snapshot ~= observedSettings then observedSettings, dirtyAt = snapshot, t + 0.8 end
+        if dirtyAt and t >= dirtyAt then saveSettings(); dirtyAt = nil end
+    end
+end
+
+pcall(function()
+    if client and client.AllowListener then
+        client.AllowListener("player_spawn")
+        client.AllowListener("server_spawn")
+        client.AllowListener("game_newmap")
+        client.AllowListener("cs_game_disconnected")
+    end
+    callbacks.Register("FireGameEvent", "rgnMultitool_MovementEvents", function(event)
+
+        local name
+        pcall(function() name = event:GetName() end)
+        if name == "server_spawn" or name == "game_newmap" or name == "cs_game_disconnected" then
+            resetMovement(name)
+        elseif name == "player_spawn" then
+            local userID, playerIndex, localIndex
+            pcall(function() userID = event:GetInt("userid") end)
+            pcall(function() playerIndex = client.GetPlayerIndexByUserID(userID) end)
+            pcall(function() localIndex = client.GetLocalPlayerIndex() end)
+            if playerIndex and localIndex and playerIndex == localIndex then resetMovement("player_spawn") end
+        end
+    end)
+end)
+
+callbacks.Register("Unload", "rgnMultitool_MovementUnload", function()
+    saveSettings()
+    M._movementCommandCallback = nil
+    M._movementDrawCallback = nil
+    pcall(callbacks.Unregister, "PreMove", "rgnMultitool_MovementPreMove")
+    pcall(callbacks.Unregister, "CreateMove", "rgnMultitool_MovementCreateMove")
+    pcall(callbacks.Unregister, "Draw", "rgnMultitool_MovementDraw")
+    pcall(callbacks.Unregister, "FireGameEvent", "rgnMultitool_MovementEvents")
+end)
+
+print("[rgnMovement] loaded | callback=main multitool hook | velocity/trail/edge/null ready")
+end)
+
+loadModule("KILLSAY", function()
+local M = M
+
+-- Clean event-driven killsay. It deliberately avoids the obfuscated upstream
+-- payload and sends at most one sanitized public-chat message per local kill.
+local CONFIG_FILE = "rgnkillsay_config.txt"
+local PACK_NAMES = {
+    "English / Competitive", "English / Savage", "Argentina / Cancha", "Short",
+    "Portuguese BR", "Spanish LATAM", "French", "German", "Italian", "Polish",
+    "Russian (Latin)", "Turkish", "Japanese (Romaji)", "Chinese (Pinyin)",
+    "Korean (Romanized)", "Dutch", "Swedish", "Custom"
+}
+local FALLBACK_NAMES = {
+    [3] = "maestro", [5] = "jogador", [6] = "rival", [7] = "joueur",
+    [8] = "Gegner", [9] = "rivale", [10] = "gracz", [11] = "igrok",
+    [12] = "rakip", [13] = "aite", [14] = "duishou", [15] = "sangdae",
+    [16] = "tegenstander", [17] = "motstandare",
+}
+local PACKS = {
+    [1] = {
+        "That duel was free, {name}; thanks for the warmup.",
+        "You peeked like you wanted to lose, {name}.",
+        "Read like a children's book, {name}.",
+        "Your timing is a public service for my score, {name}.",
+        "Another free round delivered by {name}.",
+        "You held that angle like it owed you money, {name}.",
+        "Caught clueless again, {name}.",
+        "You made that look embarrassingly easy, {name}.",
+        "Back to spectator school, {name}; lesson one starts now.",
+        "You lost the duel before you even clicked, {name}.",
+    },
+    [2] = {
+        "Sit down, {name}; you are padding my stats.",
+        "Even the practice bots put up more resistance, {name}.",
+        "You are not the threat you imagined, {name}.",
+        "That aim belongs on the loading screen, {name}.",
+        "Keep donating rounds, {name}; the scoreboard loves you.",
+        "You turned a fair duel into a free frag, {name}.",
+        "Spectator suits you better, {name}.",
+        "You brought confidence and forgot the skill, {name}.",
+        "Delete that peek from your memory, {name}.",
+        "You got humbled before the fight even started, {name}.",
+        "At this point the crosshair is just decoration, {name}.",
+        "Thanks for standing exactly where a free kill should be, {name}.",
+    },
+    [3] = {
+        "Que muerto sos, {name}; ni con el arbitro a favor.",
+        "Te comiste el amague entero, {name}; segui de largo.",
+        "Sos mas pecho frio que una tribuna vacia, {name}.",
+        "Cerra el estadio, {name}; esto ya es goleada.",
+        "Te pinte la cara, {name}; anda a buscarla adentro.",
+        "Sos un cono, {name}; te gambetee parado.",
+        "Dale que arrancamos, {name}; vos seguis en el vestuario.",
+        "Te mandaron al banco, {name}; ni para hacer tiempo servis.",
+        "Que baile te comiste, {name}; pedi la hora.",
+        "Ni con VAR te salvas de esa, {name}.",
+        "Te saque a pasear, {name}; faltaba la correa.",
+        "Pecho frio, {name}; desapareciste en la importante.",
+        "Jugaste con los botines cambiados, {name}.",
+        "Te hice precio, {name}; la proxima es goleada.",
+        "Aplaudi desde la platea, {name}; en la cancha no existis.",
+        "Te fuiste silbado, {name}; no aparezcas en el segundo tiempo.",
+    },
+    [4] = {
+        "nt {name}",
+        "outplayed {name}",
+        "free frag {name}",
+        "back to spawn {name}",
+        "sit down {name}",
+        "too easy {name}",
+        "timing diff {name}",
+        "scoreboard filler {name}",
+    },
+    [5] = {
+        "Volta pro lobby, {name}; voce so veio completar numero.",
+        "Que mira triste, {name}; ate o bot ficou com pena.",
+        "Foi de graca, {name}; nem precisei tentar.",
+        "Abre espaco no banco, {name}; titular voce nao e.",
+        "Voce entrou so para virar highlight, {name}.",
+        "Desinstala com calma, {name}; por hoje ja deu.",
+        "Mais perdido que bala no ceu, {name}.",
+        "Obrigado pelo frag gratis, {name}.",
+        "Sua mira pediu demissao, {name}.",
+        "Voce fala como craque e joga como alvo, {name}.",
+    },
+    [6] = {
+        "De vuelta al lobby, {name}; solo viniste a regalar puntos.",
+        "Ni los bots se asoman tan mal, {name}.",
+        "Mucho ruido y cero punteria, {name}.",
+        "Te mande a mirar la partida desde afuera, {name}.",
+        "Gracias por el punto gratis, {name}.",
+        "Tu mira se fue antes que vos, {name}.",
+        "Entraste confiado y saliste de adorno, {name}.",
+        "Cada vez que apareces sube mi marcador, {name}.",
+        "Te quedo grande ese duelo, {name}.",
+        "Hasta el espectador vio venir eso, {name}.",
+    },
+    [7] = {
+        "Retour au lobby, {name}; tu sers de cible gratuite.",
+        "Meme un bot resiste mieux que toi, {name}.",
+        "Beaucoup de confiance, aucune precision, {name}.",
+        "Merci pour le point gratuit, {name}.",
+        "Le mode spectateur te va mieux, {name}.",
+        "Ton viseur est juste decoratif, {name}.",
+        "Tu as perdu ce duel avant de tirer, {name}.",
+        "Encore une apparition inutile, {name}.",
+        "Tu rends mes frags beaucoup trop faciles, {name}.",
+        "Reviens quand tu trouveras ta precision, {name}.",
+    },
+    [8] = {
+        "Zurueck in die Lobby, {name}; du bist nur ein Gratisfrag.",
+        "Sogar ein Bot haette laenger ueberlebt, {name}.",
+        "Viel Selbstvertrauen, null Treffer, {name}.",
+        "Danke fuer den kostenlosen Punkt, {name}.",
+        "Der Zuschauermodus passt besser zu dir, {name}.",
+        "Dein Fadenkreuz ist nur Dekoration, {name}.",
+        "Du hattest den Kampf schon vorher verloren, {name}.",
+        "Noch so ein Peek und mein Score bedankt sich, {name}.",
+        "Du spielst das Ziel, ich sammle die Punkte, {name}.",
+        "Dein Aim ist heute nicht erschienen, {name}.",
+    },
+    [9] = {
+        "Torna nella lobby, {name}; sei solo un punto gratis.",
+        "Anche un bot avrebbe resistito di piu, {name}.",
+        "Tanta sicurezza, zero mira, {name}.",
+        "Grazie per il frag gratuito, {name}.",
+        "La modalita spettatore ti dona, {name}.",
+        "Quel mirino e solo decorazione, {name}.",
+        "Hai perso il duello prima di sparare, {name}.",
+        "Continua cosi, il mio punteggio ringrazia, {name}.",
+        "Sei entrato da eroe e uscito da comparsa, {name}.",
+        "Oggi la tua mira e rimasta a casa, {name}.",
+    },
+    [10] = {
+        "Wracaj do lobby, {name}; jestes tylko darmowym fragiem.",
+        "Nawet bot stawilby wiekszy opor, {name}.",
+        "Duza pewnosc siebie, zero celowania, {name}.",
+        "Dzieki za darmowy punkt, {name}.",
+        "Tryb widza pasuje ci lepiej, {name}.",
+        "Ten celownik masz chyba tylko dla ozdoby, {name}.",
+        "Przegrales ten pojedynek przed pierwszym strzalem, {name}.",
+        "Dalej tak zagladaj, moj wynik rosnie, {name}.",
+        "Wszedles pewny siebie, wyszedles bez wyniku, {name}.",
+        "Twoj aim wzial dzis wolne, {name}.",
+    },
+    [11] = {
+        "Nazad v lobby, {name}; ty segodnya besplatnyy frag.",
+        "Dazhe bot igral by luchshe, {name}.",
+        "Mnogo uverennosti, nol popadaniy, {name}.",
+        "Spasibo za besplatnoe ochko, {name}.",
+        "Rezhim zritelya tebe podhodit bolshe, {name}.",
+        "Pricel u tebya prosto dlya krasoty, {name}.",
+        "Ty proigral duel eshche do vystrela, {name}.",
+        "Prodolzhay tak, moy schet rastet, {name}.",
+        "Zashel kak geroi, vyshel kak statist, {name}.",
+        "Tvoy aim segodnya ne prishel, {name}.",
+    },
+    [12] = {
+        "Lobiye geri don, {name}; bedava skor oldun.",
+        "Bot bile daha uzun dayanirdi, {name}.",
+        "Ozguven cok, isabet yok, {name}.",
+        "Bedava puan icin tesekkurler, {name}.",
+        "Izleyici modu sana daha cok yakisiyor, {name}.",
+        "Nisangahin sadece sus gibi duruyor, {name}.",
+        "Daha ates etmeden duelloyu kaybettin, {name}.",
+        "Boyle devam et, skorum seni seviyor, {name}.",
+        "Kahraman gibi girdin, hedef gibi ciktin, {name}.",
+        "Bugun aimini evde unutmusun, {name}.",
+    },
+    [13] = {
+        "Lobby ni modore, {name}; tada no free frag da.",
+        "Bot no hou ga mada tsuyoi, {name}.",
+        "Jishin dake de aim ga nai na, {name}.",
+        "Free point arigatou, {name}.",
+        "Spectator no hou ga niautteru yo, {name}.",
+        "Sono crosshair wa kazari ka, {name}.",
+        "Utsu mae kara maketeta yo, {name}.",
+        "Mata kite kure, score ga fuete tasukaru, {name}.",
+        "Hero no tsumori de target ni natta na, {name}.",
+        "Kyou no aim wa yasumi mitai da, {name}.",
+    },
+    [14] = {
+        "Hui dating ba, {name}; ni zhi shi mianfei ren tou.",
+        "Lian bot dou bi ni neng da, {name}.",
+        "Zixin hen duo, mingzhong wei ling, {name}.",
+        "Xiexie ni song de mianfei fen, {name}.",
+        "Pangguan moshi geng shihe ni, {name}.",
+        "Ni de zhunxing zhi shi zhuangshi, {name}.",
+        "Hai mei kaiqiang ni jiu yijing shule, {name}.",
+        "Jixu zheyang, wo de fenshu hen kaixin, {name}.",
+        "Ni xiang dang yingxiong, jieguo dang le mubiao, {name}.",
+        "Ni jintian ba qiangfa wang zai jia le, {name}.",
+    },
+    [15] = {
+        "Lobiro doraga, {name}; neon geunyang gongjja fragiya.",
+        "Botdo neoboda deo jalhanda, {name}.",
+        "Jasin-gameun manhgo aim-eun eopne, {name}.",
+        "Gongjja jeomsu gomawo, {name}.",
+        "Gwangjeon modeuga deo jal eoullinda, {name}.",
+        "Crosshair-ga jangsig-inga, {name}.",
+        "Ssogido jeone gyeonggireul jyeosseo, {name}.",
+        "Gyesok geureoke hae, nae scorega joahae, {name}.",
+        "Yeongungcheoreom deureowa targetcheoreom nagane, {name}.",
+        "Oneul aim-eun swineun nal-inga bwa, {name}.",
+    },
+    [16] = {
+        "Terug naar de lobby, {name}; je bent een gratis frag.",
+        "Zelfs een bot hield het langer vol, {name}.",
+        "Veel zelfvertrouwen, geen enkel schot raak, {name}.",
+        "Bedankt voor het gratis punt, {name}.",
+        "De toeschouwermodus past beter bij je, {name}.",
+        "Dat vizier is blijkbaar alleen versiering, {name}.",
+        "Je verloor het duel voordat je schoot, {name}.",
+        "Blijf zo pieken, mijn score is je dankbaar, {name}.",
+        "Je kwam binnen als held en vertrok als doelwit, {name}.",
+        "Je aim is vandaag thuisgebleven, {name}.",
+    },
+    [17] = {
+        "Tillbaka till lobbyn, {name}; du ar ett gratis frag.",
+        "Till och med en bot hade overlevt langre, {name}.",
+        "Mycket sjalvfortroende, inga traffar, {name}.",
+        "Tack for gratispoangen, {name}.",
+        "Askadarlaget passar dig battre, {name}.",
+        "Ditt sikte verkar bara vara dekoration, {name}.",
+        "Du forlorade duellen innan du skot, {name}.",
+        "Fortsatt sa, min poang tackar dig, {name}.",
+        "Du kom in som hjalte och gick ut som maltavla, {name}.",
+        "Ditt aim tog visst ledigt idag, {name}.",
+    },
+}
+
+local function clamp(value, minimum, maximum)
+    value = tonumber(value) or minimum
+    if value < minimum then return minimum end
+    if value > maximum then return maximum end
+    return value
+end
+
+local function now()
+    local value
+    pcall(function() value = globals.RealTime() end)
+    if type(value) ~= "number" then pcall(function() value = globals.CurTime() end) end
+    return tonumber(value) or 0
+end
+
+local config = {}
+pcall(function()
+    local handle = file.Open(CONFIG_FILE, "r")
+    if not handle then return end
+    local raw = handle:Read() or ""
+    handle:Close()
+    for line in tostring(raw):gmatch("[^\r\n]+") do
+        local key, value = line:match("^([%w_]+)=(.*)$")
+        if key then config[key] = value end
+    end
+end)
+
+local function cfgBool(key, default)
+    if config[key] == nil then return default end
+    return config[key] == "1" or config[key] == "true"
+end
+
+local function cfgNumber(key, default, minimum, maximum)
+    return clamp(tonumber(config[key]) or default, minimum, maximum)
+end
+
+local function cleanChatText(value)
+    value = tostring(value or "")
+    value = value:gsub("[%c]", " "):gsub('"', ""):gsub(";", ""):gsub("\\", "")
+    value = value:gsub("%s+", " "):match("^%s*(.-)%s*$") or ""
+    if #value > 120 then value = value:sub(1, 120) end
+    return value
+end
+
+local tab = M:Tab("KILLSAY")
+tab:Row()
+local mainSection = tab:Section("Killsay")
+-- Deliberately session-only: every Lua Run starts disarmed regardless of an
+-- older config file.  The user must explicitly tick Enable killsay.
+local enabled = mainSection:Checkbox("Enable killsay", false)
+local savedPack = cfgNumber("pack", 1, 1, #PACK_NAMES)
+-- Catalogue v1 had Custom at index 5. Move that saved selection to the new
+-- final index once, while leaving every other existing selection untouched.
+if config.pack_catalog ~= "2" and savedPack == 5 then savedPack = #PACK_NAMES end
+local pack = mainSection:Combo("Message pack", PACK_NAMES, savedPack)
+local order = mainSection:Combo("Message order", { "Random", "Sequential" }, cfgNumber("order", 1, 1, 2))
+local includeName = mainSection:Checkbox("Include victim name", cfgBool("include_name", true))
+local delay = mainSection:Slider("Minimum chat interval", cfgNumber("chat_interval", 0.75, 0.70, 1.5), 0.70, 1.5, 0.05, "%.2fs")
+
+local customSection = tab:Section("Custom message")
+local customMessage = customSection:Input("Text ({name} / [name] = victim)", config.custom or "Nice try, {name}.", "message sent after a kill...")
+M._killsayCustomPackIndex = #PACK_NAMES
+
+tab:Col()
+local statusSection = tab:Section("Preview / status")
+local sequence, lastIndex, eventCounter = {}, {}, 0
+local pending, lastSentAt = {}, -100
+local lastVictim, lastMessage, status = "none", "none", "disabled"
+local deathEvents, localKills, sendMethod = 0, 0, "not used"
+local lastDeathSignature, lastDeathAt = nil, -100
+local eventKillCredits = 0
+local lastTestAt = -100
+local awaitingChat, chatConfirmed, chatTimeouts = nil, 0, 0
+local RUNTIME_FILE = "rgnkillsay_runtime.txt"
+local callbackEvents = 0
+local runtimeHistory = {}
+local armed = false
+local refreshEventBridge
+local bridgeRefreshPending = false
+local nextSessionPoll, nextListenerRefresh = 0, 0
+local lastSessionKey, sessionEpoch = nil, 0
+
+local function requestKillsayListeners()
+    pcall(function()
+        if not client or type(client.AllowListener) ~= "function" then return end
+        client.AllowListener("player_death")
+        client.AllowListener("player_chat")
+        client.AllowListener("server_spawn")
+        client.AllowListener("game_newmap")
+        client.AllowListener("cs_game_disconnected")
+    end)
+end
+
+local function currentSessionKey()
+    local server, map, localIndex = "", "", 0
+    pcall(function()
+        if engine and type(engine.GetServerIP) == "function" then server = engine.GetServerIP() or "" end
+    end)
+    pcall(function()
+        if engine and type(engine.GetMapName) == "function" then map = engine.GetMapName() or "" end
+    end)
+    pcall(function()
+        if client and type(client.GetLocalPlayerIndex) == "function" then localIndex = tonumber(client.GetLocalPlayerIndex()) or 0 end
+    end)
+    return cleanChatText(server) .. "|" .. cleanChatText(map) .. "|" .. (localIndex > 0 and "online" or "offline")
+end
+
+local function writeRuntime(reason, values)
+    pcall(function()
+        local detail = {}
+        if type(values) == "table" then
+            local keys = {}
+            for key in pairs(values) do keys[#keys + 1] = tostring(key) end
+            table.sort(keys)
+            for i = 1, #keys do
+                local key = keys[i]
+                detail[#detail + 1] = cleanChatText(key) .. ":" .. cleanChatText(values[key])
+            end
+        end
+        runtimeHistory[#runtimeHistory + 1] = string.format(
+            "%d|%s|%s", callbackEvents, cleanChatText(reason), table.concat(detail, ",")
+        )
+        if #runtimeHistory > 16 then table.remove(runtimeHistory, 1) end
+
+        local handle = file.Open(RUNTIME_FILE, "w")
+        if not handle then return end
+        local lines = {
+            "reason=" .. cleanChatText(reason),
+            "callback_events=" .. tostring(callbackEvents),
+            "enabled=" .. (enabled:Get() and "1" or "0"),
+            "armed=" .. (armed and "1" or "0"),
+            "death_events=" .. tostring(deathEvents),
+            "local_kills=" .. tostring(localKills),
+            "pending=" .. tostring(#pending),
+            "send_method=" .. cleanChatText(sendMethod),
+            "history_count=" .. tostring(#runtimeHistory),
+        }
+        if type(values) == "table" then
+            for key, value in pairs(values) do
+                lines[#lines + 1] = cleanChatText(key) .. "=" .. cleanChatText(value)
+            end
+        end
+        for i = 1, #runtimeHistory do
+            lines[#lines + 1] = "history_" .. tostring(i) .. "=" .. runtimeHistory[i]
+        end
+        handle:Write(table.concat(lines, "\n"))
+        handle:Close()
+    end)
+end
+
+local function selectedList()
+    local selected = clamp(pack:Get(), 1, #PACK_NAMES)
+    if selected == #PACK_NAMES then
+        local custom = cleanChatText(customMessage:Get())
+        if custom == "" then custom = "Nice try, {name}." end
+        return { custom }, selected
+    end
+    return PACKS[selected], selected
+end
+
+local function chooseTemplate(advance)
+    local list, selected = selectedList()
+    local index
+    if order:Get() == 2 then
+        index = sequence[selected] or 1
+        if advance then sequence[selected] = index % #list + 1 end
+    else
+        local salt = math.floor(now() * 1000) + eventCounter * 37 + selected * 97
+        index = salt % #list + 1
+        if #list > 1 and index == lastIndex[selected] then index = index % #list + 1 end
+        if advance then lastIndex[selected] = index end
+    end
+    return list[index], selected
+end
+
+local function formatMessage(template, victimName, selected)
+    local fallback = FALLBACK_NAMES[selected] or "opponent"
+    local replacement = includeName:Get() and cleanChatText(victimName) or fallback
+    if replacement == "" then replacement = fallback end
+    local message = tostring(template):gsub("{name}", function() return replacement end)
+    message = message:gsub("%[name%]", function() return replacement end)
+    return cleanChatText(message)
+end
+
+local function playerName(userID, playerIndex)
+    local name
+    pcall(function()
+        if client.GetPlayerNameByUserID then name = client.GetPlayerNameByUserID(userID) end
+    end)
+    if type(name) ~= "string" or name == "" then
+        local candidates = {}
+        local function addCandidate(value)
+            value = tonumber(value)
+            if value and value > 0 then candidates[#candidates + 1] = value end
+        end
+        addCandidate(playerIndex)
+        addCandidate(userID)
+        addCandidate(tonumber(userID) and (tonumber(userID) % 32768) or nil)
+        for i = 1, #candidates do
+            local candidate = tonumber(candidates[i])
+            if candidate and candidate > 0 then
+                pcall(function()
+                    if client.GetPlayerNameByIndex then name = client.GetPlayerNameByIndex(candidate) end
+                end)
+                if type(name) == "string" and name ~= "" then break end
+            end
+        end
+    end
+    return cleanChatText(name ~= nil and name or "opponent")
+end
+
+local function queueForVictim(victimName)
+    eventCounter = eventCounter + 1
+    local template, selected = chooseTemplate(true)
+    local message = formatMessage(template, victimName, selected)
+    if message == "" then status = "empty message blocked"; return end
+    if #pending >= 12 then table.remove(pending, 1) end
+    pending[#pending + 1] = { text = message, victim = victimName, at = now() }
+    lastVictim, lastMessage, status = victimName, message, "queued"
+end
+
+local function sendPublic(message)
+    if client and type(client.ChatSay) == "function" then
+        local ok, result = pcall(client.ChatSay, message)
+        if ok and result ~= false then return true, "client.ChatSay" end
+    end
+    local ok, err = pcall(function() client.Command('say "' .. message .. '"', true) end)
+    if ok then return true, "client.Command fallback" end
+    return false, tostring(err)
+end
+
+local function sendForVictimNow(victimName)
+    eventCounter = eventCounter + 1
+    local template, selected = chooseTemplate(true)
+    local message = formatMessage(template, victimName, selected)
+    if message == "" then
+        status = "empty message blocked"
+        return false, "empty message", message
+    end
+    local ok, method = sendPublic(message)
+    if ok then
+        lastSentAt, lastVictim, lastMessage = now(), victimName, message
+        sendMethod, status = method, "sent"
+        return true, method, message
+    end
+    status = "send failed"
+    sendMethod = tostring(method)
+    return false, method, message
+end
+
+statusSection:Button("Preview next message", function()
+    local template, selected = chooseTemplate(false)
+    local message = formatMessage(template, "Player", selected)
+    print("[rgnKillsay] preview: " .. message)
+    M:Notify(message, "info")
+end)
+statusSection:Button("Send test message to chat", function()
+    local t = now()
+    if t - lastTestAt < 1.0 then return end
+    lastTestAt = t
+    local template, selected = chooseTemplate(false)
+    local message = formatMessage(template, "TestPlayer", selected)
+    local ok, method = sendPublic(message)
+    if ok then
+        lastMessage, sendMethod, status = message, method, "test sent"
+        print("[rgnKillsay] test sent via " .. method .. ": " .. message)
+        M:Notify("test sent via " .. method, "success")
+    else
+        status = "test failed"
+        print("[rgnKillsay] test send error: " .. tostring(method))
+        M:Notify("chat send failed; check console", "error")
+    end
+end)
+statusSection:Button("Show killsay status", function()
+    M:Notify(string.format("%s | deaths=%d local=%d queued=%d | %s", status, deathEvents, localKills, #pending, sendMethod), "info")
+    print(string.format("[rgnKillsay] pack=%s | victim=%s | last=%s", PACK_NAMES[pack:Get()] or "?", lastVictim, lastMessage))
+end)
+statusSection:Button("Clear pending messages", function()
+    pending = {}
+    status = enabled:Get() and "ready" or "disabled"
+    M:Notify("pending killsays cleared", "success")
+end)
+
+local function saveConfig()
+    pcall(function()
+        local handle = file.Open(CONFIG_FILE, "w")
+        if not handle then return end
+        local lines = {
+            "enabled=0",
+            "pack_catalog=2",
+            "pack=" .. tostring(pack:Get()),
+            "order=" .. tostring(order:Get()),
+            "include_name=" .. (includeName:Get() and "1" or "0"),
+            "chat_interval=" .. tostring(delay:Get()),
+            "custom=" .. cleanChatText(customMessage:Get()),
+        }
+        handle:Write(table.concat(lines, "\n"))
+        handle:Close()
+    end)
+end
+
+local function snapshot()
+    return table.concat({
+        enabled:Get() and "1" or "0", pack:Get(), order:Get(), includeName:Get() and "1" or "0",
+        delay:Get(), cleanChatText(customMessage:Get())
+    }, "|")
+end
+
+local observed, dirtyAt, nextPoll = snapshot(), nil, 0
+local killPollAt, pollCounter, pollCounterKind = 0, nil, nil
+local pollAlive = {}
+
+local function entityIndex(entity)
+    local value
+    pcall(function() value = entity:GetIndex() end)
+    value = tonumber(value)
+    return value and value > 0 and value or nil
+end
+
+local function pawnHandleIndex(value)
+    value = tonumber(value)
+    if not value or value == 0 or value == -1 then return nil end
+    -- Source 2 serialises player_controller_and_pawn as a CHandle.  Aimware's
+    -- Entity APIs expect the entry index stored in its low 15 bits. Handles
+    -- may arrive as signed 32-bit integers, so negative values are valid here.
+    local index = value % 32768
+    if index <= 0 or index == 32767 then return nil end
+    return index
+end
+
+local function fieldInt(entity, name)
+    local value
+    if not entity then return nil end
+    pcall(function() value = entity:GetFieldInt(name) end)
+    value = tonumber(value)
+    return value
+end
+
+local function fieldBool(entity, name)
+    local value
+    if not entity then return nil end
+    pcall(function() value = entity:GetFieldBool(name) end)
+    if type(value) == "boolean" then return value end
+    if type(value) == "number" then return value ~= 0 end
+    return nil
+end
+
+local function fieldString(entity, name)
+    local value
+    if not entity then return nil end
+    pcall(function() value = entity:GetFieldString(name) end)
+    if type(value) == "string" and value ~= "" then return cleanChatText(value) end
+    return nil
+end
+
+local function findLocalController()
+    local controllers
+    pcall(function() controllers = entities.FindByClass("CCSPlayerController") end)
+    if type(controllers) ~= "table" then return nil end
+    for i = 1, #controllers do
+        if fieldBool(controllers[i], "m_bIsLocalPlayerController") == true then
+            return controllers[i]
+        end
+    end
+    return nil
+end
+
+local function controllerName(controller)
+    local value = fieldString(controller, "m_sSanitizedPlayerName")
+        or fieldString(controller, "m_iszPlayerName")
+    if not value then pcall(function() value = controller:GetName() end) end
+    value = cleanChatText(value)
+    return value ~= "" and value or "opponent"
+end
+
+local function controllerCounter(controller)
+    local service
+    pcall(function() service = controller:GetFieldEntity("m_pActionTrackingServices") end)
+    local kills = fieldInt(service, "m_iKills")
+    if kills and kills >= 0 then return kills, "kills" end
+    local score = fieldInt(controller, "m_iScore")
+    if score and score >= 0 then return score, "score" end
+    return nil, nil
+end
+
+local function resetKillPoll()
+    killPollAt, pollCounter, pollCounterKind = 0, nil, nil
+    pollAlive, eventKillCredits = {}, 0
+end
+
+local function resetKillsaySession(reason)
+    pending = {}
+    awaitingChat = nil
+    lastDeathSignature, lastDeathAt = nil, -100
+    lastSentAt = -100
+    resetKillPoll()
+    sessionEpoch = sessionEpoch + 1
+    status = armed and "session rearmed" or "disabled"
+    writeRuntime("session rearmed", {
+        reason = reason or "session transition",
+        session = lastSessionKey or "unknown",
+        epoch = sessionEpoch,
+    })
+end
+
+local function pollLocalKills(t)
+    if t < killPollAt then return end
+    killPollAt = t + 0.10
+
+    local controllers
+    pcall(function() controllers = entities.FindByClass("CCSPlayerController") end)
+    if type(controllers) ~= "table" or #controllers == 0 then return end
+
+    local localIndex
+    pcall(function() localIndex = client.GetLocalPlayerIndex() end)
+    local localController
+    for i = 1, #controllers do
+        local controller = controllers[i]
+        local isLocal = fieldBool(controller, "m_bIsLocalPlayerController")
+        if not isLocal and localIndex then isLocal = entityIndex(controller) == localIndex end
+        if isLocal then localController = controller; break end
+    end
+    if not localController then return end
+
+    local current, kind = controllerCounter(localController)
+    local newlyDead = {}
+    for i = 1, #controllers do
+        local controller = controllers[i]
+        if controller ~= localController then
+            local index = entityIndex(controller)
+            local alive = fieldBool(controller, "m_bPawnIsAlive")
+            if index and alive ~= nil then
+                if pollAlive[index] == true and alive == false then
+                    newlyDead[#newlyDead + 1] = controller
+                end
+                pollAlive[index] = alive
+            end
+        end
+    end
+
+    if not current then return end
+    if pollCounter == nil or pollCounterKind ~= kind or current < pollCounter then
+        pollCounter, pollCounterKind = current, kind
+        return
+    end
+    if current <= pollCounter then return end
+    pollCounter = current
+
+    local skip = math.min(eventKillCredits, #newlyDead)
+    eventKillCredits = math.max(0, eventKillCredits - skip)
+    for i = skip + 1, #newlyDead do
+        localKills = localKills + 1
+        queueForVictim(controllerName(newlyDead[i]))
+    end
+end
+
+M._killsayDrawCallback = function()
+    local t = now()
+
+    -- Aimware can clear game-event listener subscriptions while changing maps
+    -- or servers even though the Lua remains loaded. Refreshing AllowListener
+    -- is idempotent and much cheaper than polling player state every frame.
+    if t >= nextListenerRefresh then
+        nextListenerRefresh = t + 2.0
+        requestKillsayListeners()
+    end
+    if t >= nextSessionPoll then
+        nextSessionPoll = t + 0.50
+        local key = currentSessionKey()
+        if lastSessionKey == nil then
+            lastSessionKey = key
+        elseif key ~= lastSessionKey then
+            local previous = lastSessionKey
+            lastSessionKey = key
+            requestKillsayListeners()
+            resetKillsaySession("session changed: " .. previous .. " -> " .. key)
+            bridgeRefreshPending = true
+        end
+    end
+    if bridgeRefreshPending and type(refreshEventBridge) == "function" then
+        bridgeRefreshPending = false
+        refreshEventBridge("session transition")
+    end
+
+    local requested = enabled:Get() == true
+    if requested ~= armed then
+        armed = requested
+        pending = {}
+        awaitingChat = nil
+        lastDeathSignature, lastDeathAt = nil, -100
+        resetKillPoll()
+        status = armed and "armed" or "disabled"
+        writeRuntime(armed and "enabled by checkbox" or "disabled by checkbox")
+    end
+    if not armed then
+        if #pending > 0 then pending = {} end
+        status = "disabled"
+        resetKillPoll()
+    end
+
+    if awaitingChat and t - awaitingChat.at >= 1.50 then
+        chatTimeouts = chatTimeouts + 1
+        local oldInterval = delay:Get()
+        local newInterval = math.min(1.50, oldInterval + 0.10)
+        if newInterval > oldInterval then delay:Set(newInterval) end
+        writeRuntime("chat confirmation timeout", {
+            message = awaitingChat.text,
+            old_interval = oldInterval,
+            new_interval = newInterval,
+            timeouts = chatTimeouts,
+        })
+        awaitingChat = nil
+    end
+
+    if armed and not awaitingChat and #pending > 0 and t >= pending[1].at and t - lastSentAt >= delay:Get() then
+        local item = table.remove(pending, 1)
+        local ok, method = sendPublic(item.text)
+        if ok then
+            lastSentAt, lastVictim, lastMessage, sendMethod, status = t, item.victim or lastVictim, item.text, method, "sent"
+            awaitingChat = { text = item.text, at = t }
+            print("[rgnKillsay] sent via " .. method .. ": " .. item.text)
+            writeRuntime("queued message sent", {
+                victim = item.victim,
+                message = item.text,
+                method = method,
+                remaining = #pending,
+                interval = delay:Get(),
+            })
+        else
+            status = "send failed"
+            print("[rgnKillsay] send error: " .. tostring(method))
+            writeRuntime("queued message send failed", {
+                victim = item.victim,
+                message = item.text,
+                method = method,
+                remaining = #pending,
+            })
+        end
+    elseif armed then
+        status = #pending > 0 and "waiting" or "ready"
+    end
+
+    if t >= nextPoll then
+        nextPoll = t + 0.25
+        local current = snapshot()
+        if current ~= observed then observed, dirtyAt = current, t + 0.8 end
+        if dirtyAt and t >= dirtyAt then saveConfig(); dirtyAt = nil end
+    end
+end
+
+M._killsayEventCallback = function(event)
+    local eventName
+    pcall(function() eventName = event:GetName() end)
+    if eventName == "player_chat" then
+        local text
+        pcall(function() text = cleanChatText(event:GetString("text")) end)
+        if awaitingChat and text ~= "" and text == cleanChatText(awaitingChat.text) then
+            chatConfirmed = chatConfirmed + 1
+            writeRuntime("chat confirmed by server", {
+                message = text,
+                confirmed = chatConfirmed,
+                interval = delay:Get(),
+                latency = now() - awaitingChat.at,
+            })
+            awaitingChat = nil
+        end
+        return
+    end
+    if eventName == "server_spawn" or eventName == "game_newmap" or eventName == "cs_game_disconnected" then
+        requestKillsayListeners()
+        resetKillsaySession(eventName)
+        bridgeRefreshPending = true
+        return
+    end
+    if eventName ~= "player_death" then return end
+    callbackEvents = callbackEvents + 1
+
+    -- Current CS2/Aimware exposes player_controller_and_pawn event members
+    -- through the *_pawn aliases.  The public reference Killsay uses these
+    -- direct pawn indices; treating them as legacy user IDs drops every kill.
+    local attackerPawnHandle, victimPawnHandle
+    pcall(function() attackerPawnHandle = tonumber(event:GetInt("attacker_pawn")) end)
+    pcall(function() victimPawnHandle = tonumber(event:GetInt("userid_pawn")) end)
+    local attackerPawnIndex = pawnHandleIndex(attackerPawnHandle)
+    local victimPawnIndex = pawnHandleIndex(victimPawnHandle)
+    local rawAttacker, rawVictim, traceLocalPawn, traceLocalClient
+    pcall(function() rawAttacker = tonumber(event:GetInt("attacker")) end)
+    pcall(function() rawVictim = tonumber(event:GetInt("userid")) end)
+    pcall(function()
+        local pawn = entities.GetLocalPlayer()
+        if pawn then traceLocalPawn = entityIndex(pawn) end
+    end)
+    pcall(function() traceLocalClient = tonumber(client.GetLocalPlayerIndex()) end)
+    writeRuntime("player_death received", {
+        attacker_handle = attackerPawnHandle,
+        userid_handle = victimPawnHandle,
+        attacker_pawn = attackerPawnIndex,
+        userid_pawn = victimPawnIndex,
+        attacker = rawAttacker,
+        userid = rawVictim,
+        local_pawn = traceLocalPawn,
+        local_client = traceLocalClient,
+    })
+    if not armed then
+        writeRuntime("player_death ignored: not armed", {
+            attacker_handle = attackerPawnHandle,
+            userid_handle = victimPawnHandle,
+            attacker_pawn = attackerPawnIndex,
+            userid_pawn = victimPawnIndex,
+        })
+        return
+    end
+    if attackerPawnIndex and attackerPawnIndex > 0 and victimPawnIndex and victimPawnIndex > 0 then
+        if attackerPawnIndex == victimPawnIndex then
+            writeRuntime("player_death ignored: suicide", { attacker_pawn = attackerPawnIndex, userid_pawn = victimPawnIndex })
+            return
+        end
+
+        local localPawn, attackerPawn, victimPawn
+        pcall(function() localPawn = entities.GetLocalPlayer() end)
+        pcall(function() attackerPawn = entities.GetByIndex(attackerPawnIndex) end)
+        pcall(function() victimPawn = entities.GetByIndex(victimPawnIndex) end)
+
+        local localPawnIndex = entityIndex(localPawn)
+        local attackerEntityIndex = entityIndex(attackerPawn)
+        local victimEntityIndex = entityIndex(victimPawn)
+        local localClientIndex
+        pcall(function() localClientIndex = tonumber(client.GetLocalPlayerIndex()) end)
+
+        local isLocal = localPawnIndex and (
+            attackerPawnIndex == localPawnIndex or attackerEntityIndex == localPawnIndex
+        ) or false
+        if not isLocal and localClientIndex and localClientIndex > 0 then
+            isLocal = attackerPawnIndex == localClientIndex or attackerEntityIndex == localClientIndex
+        end
+        if not isLocal then
+            local attackerName, localName
+            pcall(function() if attackerPawn then attackerName = attackerPawn:GetName() end end)
+            pcall(function() if localPawn then localName = localPawn:GetName() end end)
+            attackerName, localName = cleanChatText(attackerName):lower(), cleanChatText(localName):lower()
+            if attackerName ~= "" and localName ~= "" and attackerName == localName then isLocal = true end
+        end
+        if not isLocal then
+            writeRuntime("player_death ignored: attacker is not local", {
+                attacker_pawn = attackerPawnIndex,
+                userid_pawn = victimPawnIndex,
+                attacker_handle = attackerPawnHandle,
+                userid_handle = victimPawnHandle,
+                local_pawn = localPawnIndex,
+                local_client = localClientIndex,
+                attacker_entity = attackerEntityIndex,
+            })
+            return
+        end
+        if localPawnIndex and (victimPawnIndex == localPawnIndex or victimEntityIndex == localPawnIndex) then
+            writeRuntime("player_death ignored: victim is local", { attacker_pawn = attackerPawnIndex, userid_pawn = victimPawnIndex, local_pawn = localPawnIndex })
+            return
+        end
+
+        local victimName
+        pcall(function() if victimPawn then victimName = victimPawn:GetName() end end)
+        victimName = cleanChatText(victimName)
+        if victimName == "" then
+            pcall(function() victimName = client.GetPlayerNameByIndex(victimPawnIndex) end)
+            victimName = cleanChatText(victimName)
+        end
+        if victimName == "" then victimName = "opponent" end
+
+        local signature, eventTime = "pawn:" .. tostring(attackerPawnIndex) .. ":" .. tostring(victimPawnIndex), now()
+        if signature == lastDeathSignature and eventTime - lastDeathAt < 0.10 then return end
+        lastDeathSignature, lastDeathAt = signature, eventTime
+        deathEvents, localKills = deathEvents + 1, localKills + 1
+        queueForVictim(victimName)
+        writeRuntime("player_death queued", {
+            attacker_pawn = attackerPawnIndex,
+            userid_pawn = victimPawnIndex,
+            attacker_handle = attackerPawnHandle,
+            userid_handle = victimPawnHandle,
+            local_pawn = localPawnIndex,
+            victim = victimName,
+            queued = #pending,
+        })
+        return
+    end
+
+    -- Compatibility fallback for older event schemas that still expose IDs.
+    local attackerID, victimID = rawAttacker, rawVictim
+    if not attackerID or not victimID or attackerID == 0 or attackerID == victimID then return end
+
+    attackerID, victimID = tonumber(attackerID), tonumber(victimID)
+    if not attackerID or not victimID then return end
+    local signature, eventTime = tostring(attackerID) .. ":" .. tostring(victimID), now()
+    if signature == lastDeathSignature and eventTime - lastDeathAt < 0.10 then return end
+    lastDeathSignature, lastDeathAt = signature, eventTime
+    deathEvents = deathEvents + 1
+
+    local attackerIndex, victimIndex, localIndex
+    pcall(function() attackerIndex = client.GetPlayerIndexByUserID(attackerID) end)
+    pcall(function() victimIndex = client.GetPlayerIndexByUserID(victimID) end)
+    pcall(function() localIndex = client.GetLocalPlayerIndex() end)
+    if type(attackerIndex) ~= "number" or attackerIndex <= 0 then attackerIndex = nil end
+    if type(victimIndex) ~= "number" or victimIndex <= 0 then victimIndex = nil end
+    if type(localIndex) ~= "number" or localIndex <= 0 then localIndex = nil end
+    local attackerEntry = pawnHandleIndex(attackerID)
+    local victimEntry = pawnHandleIndex(victimID)
+    local isLocal = attackerIndex and localIndex and attackerIndex == localIndex or false
+    local localPawnIndex
+    pcall(function()
+        local pawn = entities.GetLocalPlayer()
+        if pawn then localPawnIndex = pawn:GetIndex() end
+    end)
+    if not isLocal and type(attackerIndex) == "number" and type(localPawnIndex) == "number" then
+        isLocal = attackerIndex == localPawnIndex
+    end
+    if not isLocal and type(localIndex) == "number" then
+        isLocal = attackerID == localIndex or attackerEntry == localIndex
+    end
+    if not isLocal and type(localPawnIndex) == "number" then
+        isLocal = attackerID == localPawnIndex or attackerEntry == localPawnIndex
+    end
+    local localController = findLocalController()
+    local localControllerIndex = entityIndex(localController)
+    if not isLocal and localControllerIndex then
+        isLocal = attackerID == localControllerIndex or attackerEntry == localControllerIndex
+    end
+    if not isLocal and type(localIndex) == "number" then
+        local info
+        pcall(function() info = client.GetPlayerInfo(localIndex) end)
+        local localUserID
+        pcall(function() localUserID = tonumber(info.UserID or info.userID or info.userid) end)
+        if localUserID and localUserID == attackerID then isLocal = true end
+    end
+    if not isLocal then
+        local attackerName, localName
+        pcall(function() attackerName = client.GetPlayerNameByUserID(attackerID) end)
+        pcall(function() localName = client.GetPlayerNameByIndex(localIndex) end)
+        attackerName, localName = cleanChatText(attackerName):lower(), cleanChatText(localName):lower()
+        if attackerName ~= "" and localName ~= "" and attackerName == localName then isLocal = true end
+    end
+    if not isLocal then
+        writeRuntime("legacy player_death ignored: attacker is not local", {
+            attacker = attackerID,
+            userid = victimID,
+            attacker_entry = attackerEntry,
+            userid_entry = victimEntry,
+            attacker_index = attackerIndex,
+            victim_index = victimIndex,
+            local_client = localIndex,
+            local_pawn = localPawnIndex,
+            local_controller = localControllerIndex,
+        })
+        return
+    end
+    if victimIndex == localIndex then return end
+    eventKillCredits = eventKillCredits + 1
+    localKills = localKills + 1
+    local legacyVictim = playerName(victimID, victimIndex or victimID % 32768)
+    queueForVictim(legacyVictim)
+    writeRuntime("legacy player_death queued", {
+        attacker = attackerID,
+        userid = victimID,
+        local_client = localIndex,
+        victim = legacyVictim,
+        queued = #pending,
+    })
+end
+
+pcall(function()
+    callbacks.Unregister("FireGameEvent", "rgnMultitool_KillsayEvents")
+end)
+
+requestKillsayListeners()
+lastSessionKey = currentSessionKey()
+
+refreshEventBridge = function(reason)
+    local generation = (tonumber(rawget(_G, "RGN_KILLSAY_GENERATION")) or 0) + 1
+    rawset(_G, "RGN_KILLSAY_GENERATION", generation)
+    local registered = pcall(function()
+        -- Match the working Aimware scripts exactly: anonymous two-argument
+        -- hook. Older hooks become inert through the generation gate.
+        callbacks.Register("FireGameEvent", function(event)
+            if rawget(_G, "RGN_KILLSAY_GENERATION") ~= generation then return end
+            if type(M._killsayEventCallback) == "function" then
+                local ok, err = pcall(M._killsayEventCallback, event)
+                if not ok then writeRuntime("callback error", { error = tostring(err) }) end
+            end
+        end)
+    end)
+    writeRuntime(registered and "callback registered" or "callback registration failed", {
+        generation = generation,
+        reason = reason or "manual",
+    })
+    return registered
+end
+
+refreshEventBridge("module load")
+
+print("[rgnKillsay] loaded | opt-in | clean packs + Argentina + custom")
+end)
+loadModule("IDENTITY", function()
+local M = M
+
+-- CS2 no longer exposes a conventional clan-tag setter.  The current,
+-- scoreboard-visible equivalent is a prefix composed with the user name.
+-- This module follows the working engine2.dll name-ConVar route from the
+-- Aimware reference, but validates every signature and pointer before use.
+local CONFIG_FILE = "rgnidentity_config.txt"
+local RUNTIME_FILE = "rgnidentity_runtime.txt"
+local ENGINE_DLL = "engine2.dll"
+local CVAR_PATTERN = "48 8B 0D ?? ?? ?? ?? 48 8B 16 48 89 7C 24 ?? 4C 89 4C 24 ??"
+local RESOLVE_PATTERN = "48 8B D3 E8 ?? ?? ?? ?? 48 8B 44 24"
+local FCVAR_DEVELOPMENTONLY = 0x2
+local FCVAR_USERINFO = 0x200
+local MIN_WRITE_INTERVAL = 0.30
+
+local function clock()
+    local value = 0
+    pcall(function()
+        if common and type(common.Time) == "function" then value = common.Time()
+        elseif globals and type(globals.RealTime) == "function" then value = globals.RealTime()
+        elseif globals and type(globals.CurTime) == "function" then value = globals.CurTime() end
+    end)
+    return tonumber(value) or 0
+end
+
+local function clamp(value, minimum, maximum)
+    value = tonumber(value) or minimum
+    if value < minimum then return minimum end
+    if value > maximum then return maximum end
+    return value
+end
+
+local function clean(value, maximum)
+    value = tostring(value or "")
+    value = value:gsub("[%c]", " "):gsub('"', ""):gsub(";", ""):gsub("\\", "")
+    value = value:gsub("%s+", " "):match("^%s*(.-)%s*$") or ""
+    maximum = maximum or 48
+    if #value > maximum then value = value:sub(1, maximum) end
+    return value
+end
+
+local config = {}
+pcall(function()
+    local handle = file.Open(CONFIG_FILE, "r")
+    if not handle then return end
+    local raw = handle:Read() or ""
+    handle:Close()
+    for line in tostring(raw):gmatch("[^\r\n]+") do
+        local key, value = line:match("^([%w_]+)=(.*)$")
+        if key then config[key] = value end
+    end
+end)
+
+local function cfgBool(key, default)
+    if config[key] == nil then return default end
+    return config[key] == "1" or config[key] == "true"
+end
+
+local function cfgNumber(key, default, minimum, maximum)
+    return clamp(tonumber(config[key]) or default, minimum, maximum)
+end
+
+local tab = M:Tab("IDENTITY")
+tab:Row()
+local nameSection = tab:Section("Custom name")
+local nameEnabled = nameSection:Checkbox("Enable custom name", cfgBool("name_enabled", false))
+local nameText = nameSection:Input("Name text", config.name_text or "rgnMultitool", "custom player name...")
+local nameAnimated = nameSection:Checkbox("Animate custom name", cfgBool("name_animated", false))
+local nameSpeed = nameSection:Slider("Name animation speed", cfgNumber("name_speed", 0.60, 0.35, 2.0), 0.35, 2.0, 0.05, "%.2fs")
+
+local clanSection = tab:Section("Clan tag / prefix")
+local clanEnabled = clanSection:Checkbox("Enable clan prefix", cfgBool("clan_enabled", false))
+local clanText = clanSection:Input("Clan text", config.clan_text or "RGN", "prefix shown before name...")
+local clanAnimated = clanSection:Checkbox("Animate clan text", cfgBool("clan_animated", false))
+local separatorBar = clanSection:Checkbox("Use middle bar |", cfgBool("separator_bar", true))
+local clanSpeed = clanSection:Slider("Clan animation speed", cfgNumber("clan_speed", 0.60, 0.35, 2.0), 0.35, 2.0, 0.05, "%.2fs")
+
+tab:Col()
+local actionSection = tab:Section("Actions")
+local statusSection = tab:Section("Status")
+
+local f = rawget(_G, "ffi")
+local bitlib = rawget(_G, "bit") or rawget(_G, "bit32")
+local sharedState = rawget(_G, "RGN_IDENTITY_SHARED_STATE")
+if type(sharedState) ~= "table" then
+    sharedState = {}
+    rawset(_G, "RGN_IDENTITY_SHARED_STATE", sharedState)
+end
+local flagsPointer, originalFlags = sharedState.flagsPointer, sharedState.originalFlags
+local patchReady = flagsPointer ~= nil and originalFlags ~= nil
+local patchAttempted = patchReady
+local originalName = clean(sharedState.originalName or config.original_name or "", 64)
+local storedLastApplied = clean(sharedState.lastApplied or config.last_applied or "", 64)
+local lastApplied, lastWriteAt = nil, -100
+local changed, captured = false, false
+local status = "waiting for a server"
+local initAt, nextSessionPoll = clock(), 0
+local lastSessionKey = nil
+local forceApply = false
+local runtimeHistory = {}
+
+local function writeRuntime(reason, values)
+    pcall(function()
+        local details = {}
+        if type(values) == "table" then
+            local keys = {}
+            for key in pairs(values) do keys[#keys + 1] = tostring(key) end
+            table.sort(keys)
+            for i = 1, #keys do
+                local key = keys[i]
+                details[#details + 1] = clean(key, 40) .. ":" .. clean(values[key], 80)
+            end
+        end
+        runtimeHistory[#runtimeHistory + 1] = clean(reason, 80) .. "|" .. table.concat(details, ",")
+        if #runtimeHistory > 12 then table.remove(runtimeHistory, 1) end
+        local handle = file.Open(RUNTIME_FILE, "w")
+        if not handle then return end
+        local lines = {
+            "reason=" .. clean(reason, 80),
+            "status=" .. clean(status, 100),
+            "patch_ready=" .. (patchReady and "1" or "0"),
+            "captured=" .. (captured and "1" or "0"),
+            "changed=" .. (changed and "1" or "0"),
+            "original=" .. clean(originalName, 64),
+            "last_applied=" .. clean(lastApplied or "", 64),
+        }
+        for i = 1, #runtimeHistory do lines[#lines + 1] = "history_" .. i .. "=" .. runtimeHistory[i] end
+        handle:Write(table.concat(lines, "\n"))
+        handle:Close()
+    end)
+end
+
+local function saveConfig()
+    local values = {
+        "name_enabled=" .. (nameEnabled:Get() and "1" or "0"),
+        "name_text=" .. clean(nameText:Get(), 48),
+        "name_animated=" .. (nameAnimated:Get() and "1" or "0"),
+        "name_speed=" .. string.format("%.2f", clamp(nameSpeed:Get(), 0.35, 2.0)),
+        "clan_enabled=" .. (clanEnabled:Get() and "1" or "0"),
+        "clan_text=" .. clean(clanText:Get(), 32),
+        "clan_animated=" .. (clanAnimated:Get() and "1" or "0"),
+        "separator_bar=" .. (separatorBar:Get() and "1" or "0"),
+        "clan_speed=" .. string.format("%.2f", clamp(clanSpeed:Get(), 0.35, 2.0)),
+        "original_name=" .. clean(originalName, 64),
+        "last_applied=" .. clean(lastApplied or storedLastApplied, 64),
+    }
+    local ok = false
+    pcall(function()
+        local handle = file.Open(CONFIG_FILE, "w")
+        if not handle then return end
+        handle:Write(table.concat(values, "\n"))
+        handle:Close()
+        ok = true
+    end)
+    return ok
+end
+
+local function sessionKey()
+    local server, map, localIndex = "", "", 0
+    pcall(function() if engine and type(engine.GetServerIP) == "function" then server = engine.GetServerIP() or "" end end)
+    pcall(function() if engine and type(engine.GetMapName) == "function" then map = engine.GetMapName() or "" end end)
+    pcall(function() if client and type(client.GetLocalPlayerIndex) == "function" then localIndex = tonumber(client.GetLocalPlayerIndex()) or 0 end end)
+    return clean(server, 80) .. "|" .. clean(map, 80) .. "|" .. (localIndex > 0 and "online" or "offline")
+end
+
+local function validAddress(value)
+    value = tonumber(value)
+    return value and value >= 0x10000
+end
+
+local function restoreFlags()
+    if flagsPointer ~= nil and originalFlags ~= nil then
+        pcall(function() flagsPointer[0] = originalFlags end)
+    end
+    flagsPointer, originalFlags = nil, nil
+    sharedState.flagsPointer, sharedState.originalFlags = nil, nil
+    patchReady, patchAttempted = false, false
+end
+
+local function patchNameConVar()
+    if patchReady then return true end
+    if patchAttempted then return false end
+    patchAttempted = true
+    if type(f) ~= "table" or not mem or type(mem.FindPattern) ~= "function" or
+       type(bitlib) ~= "table" or type(bitlib.band) ~= "function" or type(bitlib.bor) ~= "function" then
+        status = "name engine unavailable: enable insecure FFI"
+        writeRuntime("patch prerequisites unavailable")
+        return false
+    end
+
+    local ok, result = pcall(function()
+        pcall(function() f.cdef[[ void* GetModuleHandleA(const char* lpModuleName); ]] end)
+        local module = f.C.GetModuleHandleA(ENGINE_DLL)
+        local base = tonumber(f.cast("uintptr_t", module))
+        if not validAddress(base) then error("engine2.dll is not loaded") end
+
+        local cvarPattern = tonumber(mem.FindPattern(ENGINE_DLL, CVAR_PATTERN))
+        local resolvePattern = tonumber(mem.FindPattern(ENGINE_DLL, RESOLVE_PATTERN))
+        if not validAddress(cvarPattern) then error("VEngineCvar007 signature not found") end
+        if not validAddress(resolvePattern) then error("ResolveConVar signature not found") end
+
+        local cvarRelative = tonumber(f.cast("int32_t*", cvarPattern + 3)[0])
+        local resolveRelative = tonumber(f.cast("int32_t*", resolvePattern + 4)[0])
+        local cvarGlobal = cvarPattern + cvarRelative + 7
+        local resolveAddress = resolvePattern + resolveRelative + 8
+        if not validAddress(cvarGlobal) or not validAddress(resolveAddress) then error("invalid resolved signature") end
+
+        local engineAddress = tonumber(f.cast("uintptr_t*", cvarGlobal)[0])
+        if not validAddress(engineAddress) then error("invalid VEngineCvar007 object") end
+        local engineVtable = tonumber(f.cast("uintptr_t*", engineAddress)[0])
+        if not validAddress(engineVtable) then error("invalid VEngineCvar007 vtable") end
+        local findAddress = tonumber(f.cast("uintptr_t*", engineVtable)[0xB])
+        if not validAddress(findAddress) then error("invalid FindConVar function") end
+
+        local findConVar = f.cast("void* (*)(void*, void*, const char*, int)", findAddress)
+        local findOutput = f.new("void*[1]")
+        local findName = f.new("char[5]", "name")
+        findConVar(f.cast("void*", engineAddress), findOutput, findName, 0)
+        if findOutput[0] == nil then error("name ConVar handle not found") end
+
+        local resolveConVar = f.cast("void* (*)(int64_t*, int32_t, int16_t)", resolveAddress)
+        local resolveOutput = f.new("int64_t[2]")
+        resolveConVar(resolveOutput, f.cast("int32_t", findOutput[0]), 0)
+        local convarAddress = tonumber(resolveOutput[1])
+        if not validAddress(convarAddress) then error("name ConVar could not be resolved") end
+
+        local pointer = f.cast("uint32_t*", convarAddress + 0x30)
+        local current = tonumber(pointer[0])
+        if current == nil then error("name ConVar flags unavailable") end
+        flagsPointer, originalFlags = pointer, current
+        pointer[0] = bitlib.bor(bitlib.band(current, bitlib.bnot(FCVAR_DEVELOPMENTONLY)), FCVAR_USERINFO)
+        sharedState.flagsPointer, sharedState.originalFlags = pointer, current
+        return true
+    end)
+
+    if not ok or not result then
+        status = "name engine refused: " .. clean(result, 80)
+        restoreFlags()
+        patchAttempted = true
+        writeRuntime("patch failed", { error = result })
+        return false
+    end
+    patchReady = true
+    status = "name engine ready"
+    writeRuntime("patch ready")
+    return true
+end
+
+local function localPlayerName()
+    local result = ""
+    pcall(function()
+        local player = entities and entities.GetLocalPlayer and entities.GetLocalPlayer()
+        if player and type(player.GetName) == "function" then result = player:GetName() or "" end
+    end)
+    return clean(result, 64)
+end
+
+local function captureOriginal()
+    if captured then return originalName ~= "" end
+    local current = localPlayerName()
+    if current == "" then return false end
+    if storedLastApplied ~= "" and current == storedLastApplied and originalName ~= "" then
+        -- A previous hot reload left the composed name active; keep the saved
+        -- real name rather than capturing our own prefix as the new baseline.
+    else
+        originalName = current
+    end
+    captured = originalName ~= ""
+    if captured then
+        sharedState.originalName = originalName
+        status = "original name captured"
+        saveConfig()
+        writeRuntime("original captured", { name = originalName })
+    end
+    return captured
+end
+
+local function animatedPart(value, speed, phase)
+    value = clean(value, 48)
+    if value == "" then return "" end
+    local length = #value
+    local steps = length * 2
+    if steps <= 0 then return value end
+    local tick = math.floor((clock() + (phase or 0)) / clamp(speed, 0.35, 2.0)) % steps
+    local count = tick <= length and tick or (steps - tick)
+    if count <= 0 then return "" end
+    return value:sub(1, count)
+end
+
+local function composeIdentity()
+    local base = originalName
+    if nameEnabled:Get() then
+        base = clean(nameText:Get(), 48)
+        if nameAnimated:Get() then base = animatedPart(base, nameSpeed:Get(), 0) end
+    end
+    if base == "" then base = originalName ~= "" and originalName or "player" end
+
+    local prefix = ""
+    if clanEnabled:Get() then
+        prefix = clean(clanText:Get(), 32)
+        if clanAnimated:Get() then prefix = animatedPart(prefix, clanSpeed:Get(), 0.17) end
+    end
+    local composed = base
+    if prefix ~= "" then composed = prefix .. (separatorBar:Get() and " | " or " ") .. base end
+    composed = clean(composed, 63)
+    if composed == "" then composed = "player" end
+    return composed
+end
+
+local function writeName(value, forced)
+    value = clean(value, 63)
+    if value == "" then return false, "empty name refused" end
+    local t = clock()
+    if not forced and (value == lastApplied or t - lastWriteAt < MIN_WRITE_INTERVAL) then
+        return value == lastApplied, value == lastApplied and "unchanged" or "throttled"
+    end
+    if not patchNameConVar() then return false, status end
+    local ok, err = pcall(function()
+        client.Command('name "' .. value .. '"', true)
+        client.Command('setinfo name "' .. value .. '"', true)
+    end)
+    if not ok then
+        status = "name command failed: " .. clean(err, 70)
+        writeRuntime("command failed", { error = err })
+        return false, status
+    end
+    lastApplied, storedLastApplied, lastWriteAt = value, value, t
+    sharedState.lastApplied = value
+    changed = originalName ~= "" and value ~= originalName
+    status = changed and "identity active" or "original name restored"
+    return true, status
+end
+
+local function restoreOriginal(forced)
+    if not captureOriginal() then return false, "original name unavailable" end
+    local ok, message = writeName(originalName, forced ~= false)
+    if ok then
+        changed = false
+        nameEnabled:Set(false)
+        clanEnabled:Set(false)
+        status = "original name restored"
+        saveConfig()
+        writeRuntime("original restored")
+    end
+    return ok, message
+end
+
+actionSection:Button("Apply identity now", function()
+    if not captureOriginal() then M:Notify("join a server before applying identity", "error"); return end
+    forceApply = true
+    saveConfig()
+    M:Notify("identity queued safely", "success")
+end)
+actionSection:Button("Save identity settings", function()
+    local ok = saveConfig()
+    M:Notify(ok and "identity settings saved" or "identity settings could not be saved", ok and "success" or "error")
+end)
+actionSection:Button("Restore original name", function()
+    local ok, message = restoreOriginal(true)
+    M:Notify(ok and "original name restored" or message, ok and "success" or "error")
+end)
+statusSection:Button("Show identity status", function()
+    M:Notify(status .. " | prefix=" .. (clanEnabled:Get() and "on" or "off") .. " name=" .. (nameEnabled:Get() and "on" or "off"), "info")
+end)
+statusSection:Button("Show composed name", function()
+    M:Notify("current target: " .. composeIdentity(), "info")
+end)
+
+M._identityHandles = {
+    nameEnabled = nameEnabled, clanEnabled = clanEnabled,
+    nameAnimated = nameAnimated, clanAnimated = clanAnimated,
+}
+M._identityComposeForTest = composeIdentity
+
+local generation = (tonumber(rawget(_G, "RGN_IDENTITY_GENERATION")) or 0) + 1
+rawset(_G, "RGN_IDENTITY_GENERATION", generation)
+
+local function identityDraw()
+    if rawget(_G, "RGN_IDENTITY_GENERATION") ~= generation then return end
+    local t = clock()
+    if t >= nextSessionPoll then
+        nextSessionPoll = t + 0.75
+        local key = sessionKey()
+        if lastSessionKey == nil then lastSessionKey = key end
+        if key ~= lastSessionKey then
+            lastSessionKey = key
+            captured, lastApplied, changed = false, nil, false
+            initAt, forceApply = t, false
+            status = "session changed; waiting for player"
+            writeRuntime("session changed", { session = key })
+        end
+    end
+
+    local wantsIdentity = nameEnabled:Get() or clanEnabled:Get()
+    if not wantsIdentity then
+        if changed and captured and t - lastWriteAt >= MIN_WRITE_INTERVAL then restoreOriginal(false) end
+        return
+    end
+    if t - initAt < 1.0 then return end
+    if not captureOriginal() then status = "waiting for local player"; return end
+
+    local target = composeIdentity()
+    if forceApply or target ~= lastApplied then
+        local ok = writeName(target, forceApply)
+        if ok then
+            forceApply = false
+        elseif patchAttempted and not patchReady then
+            -- Do not retry a broken signature every frame.  A server/map
+            -- transition or a fresh Lua Run will perform one new safe probe.
+            forceApply = false
+        end
+    end
+end
+M._identityDrawCallback = identityDraw
+callbacks.Register("Draw", identityDraw)
+
+callbacks.Register("Unload", function()
+    if rawget(_G, "RGN_IDENTITY_GENERATION") ~= generation then return end
+    pcall(saveConfig)
+    if changed and originalName ~= "" then pcall(function() writeName(originalName, true) end) end
+    restoreFlags()
+    rawset(_G, "RGN_IDENTITY_GENERATION", generation + 1)
+end)
+
+writeRuntime("module loaded")
+print("[rgnIdentity] loaded | custom name + scoreboard prefix | safe engine2 validation")
+end)
+
+loadModule("VOTES", function()
+-- rgnMultitool vote revealer.
+-- Uses documented game events and ordinary entity APIs. The only FFI call is
+-- the current local HUD-chat printer; Steam avatar vtables remain excluded.
+-- This is a built-in service: always enabled and intentionally has no tab.
+local PLAY_SOUND, SHOW_TEAM, DISPLAY_DURATION = true, true, 15
+
+local active, order, playerNames, chatQueue = {}, {}, {}, {}
+local preStartVotes, firstNoName = {}, ""
+local playerTeams, recentDisconnect = {}, { at = -1000, team = nil, name = "" }
+local currentVoteTeam, currentVoteLabel = nil, ""
+local armed, lastVote, endAt, voteOpen = true, 0, 0, false
+local eventCount, status = 0, "ready"
+local callbackEvents, drawCallbacks = 0, 0
+local nextListenerRefresh, nextSessionPoll = 0, 0
+local lastSessionKey
+local refreshVoteBridge, bridgeRefreshPending
+local RUNTIME_FILE = "rgnvotes_runtime.txt"
+local runtimeHistory = {}
+local localChatPrint, localChatStatus
+local localPrintCount = 0
+
+local function clock()
+    local value = 0
+    pcall(function()
+        if common and type(common.Time) == "function" then value = common.Time()
+        elseif globals and type(globals.RealTime) == "function" then value = globals.RealTime()
+        elseif globals and type(globals.CurTime) == "function" then value = globals.CurTime() end
+    end)
+    return tonumber(value) or 0
+end
+
+local function clean(value)
+    value = tostring(value or "")
+    value = value:gsub("[%c]", " "):gsub('"', ""):gsub(";", ""):gsub("\\", "")
+    value = value:gsub("%s+", " "):match("^%s*(.-)%s*$") or ""
+    if #value > 80 then value = value:sub(1, 80) end
+    return value
+end
+
+local function writeRuntime(reason, values)
+    pcall(function()
+        local details = {}
+        if type(values) == "table" then
+            local keys = {}
+            for key in pairs(values) do keys[#keys + 1] = tostring(key) end
+            table.sort(keys)
+            for i = 1, #keys do
+                local key = keys[i]
+                details[#details + 1] = clean(key) .. ":" .. clean(values[key])
+            end
+        end
+        runtimeHistory[#runtimeHistory + 1] = clean(reason) .. "|" .. table.concat(details, ",")
+        if #runtimeHistory > 20 then table.remove(runtimeHistory, 1) end
+        local handle = file.Open(RUNTIME_FILE, "w")
+        if not handle then return end
+        local lines = {
+            "reason=" .. clean(reason),
+            "enabled=1",
+            "armed=1",
+            "events=" .. tostring(eventCount),
+            "callback_events=" .. tostring(callbackEvents),
+            "draw_callbacks=" .. tostring(drawCallbacks),
+            "visible=" .. tostring(#order),
+            "queued=" .. tostring(#chatQueue),
+            "local_chat=" .. clean(localChatStatus or "not initialized"),
+        }
+        if type(values) == "table" then
+            for key, value in pairs(values) do lines[#lines + 1] = clean(key) .. "=" .. clean(value) end
+        end
+        for i = 1, #runtimeHistory do lines[#lines + 1] = "history_" .. i .. "=" .. runtimeHistory[i] end
+        handle:Write(table.concat(lines, "\n"))
+        handle:Close()
+    end)
+end
+
+local function initLocalChat()
+    localChatPrint, localChatStatus = nil, "unavailable"
+    local f = rawget(_G, "ffi")
+    if type(f) ~= "table" or not mem or type(mem.FindPattern) ~= "function" then
+        localChatStatus = "ffi or mem unavailable"
+        return false
+    end
+    local ok, address = pcall(mem.FindPattern, "client.dll",
+        "4C 89 4C 24 20 53 56 B8 38 10 00 00 E8 ?? ?? ?? ?? 48 2B E0 48 8B 0D ?? ?? ?? ?? 41 8B D8 48 8B F2")
+    address = tonumber(address)
+    if not ok or not address or address < 0x10000 then
+        localChatStatus = "chat signature not found"
+        return false
+    end
+    local castOK, fn, flags = pcall(function()
+        return f.cast("void(*)(void*, void*, uint32_t, const char*, const char*)", f.cast("void*", address)),
+            f.new("int[1]", 0x0100)
+    end)
+    if not castOK or not fn then
+        localChatStatus = "chat signature cast failed"
+        return false
+    end
+    localChatPrint = function(text)
+        return pcall(function() fn(nil, flags, 0, "%s", tostring(text)) end)
+    end
+    localChatStatus = string.format("ready@%X", address)
+    return true
+end
+
+local function requestListeners()
+    pcall(function()
+        if not client or type(client.AllowListener) ~= "function" then return end
+        for _, name in ipairs({
+            "vote_started", "vote_begin", "vote_cast", "vote_changed", "vote_options",
+            "vote_ended", "vote_failed", "vote_passed", "player_connect",
+            "player_info", "player_team", "player_disconnect", "server_spawn",
+            "game_newmap", "cs_game_disconnected"
+        }) do
+            client.AllowListener(name)
+        end
+    end)
+end
+
+local function sessionKey()
+    local server, map, localIndex = "", "", 0
+    pcall(function() if engine and type(engine.GetServerIP) == "function" then server = engine.GetServerIP() or "" end end)
+    pcall(function() if engine and type(engine.GetMapName) == "function" then map = engine.GetMapName() or "" end end)
+    pcall(function() if client and type(client.GetLocalPlayerIndex) == "function" then localIndex = tonumber(client.GetLocalPlayerIndex()) or 0 end end)
+    return clean(server) .. "|" .. clean(map) .. "|" .. (localIndex > 0 and "online" or "offline")
+end
+
+local function clearVote(reason, preserveChat)
+    active, order = {}, {}
+    if not preserveChat then chatQueue = {} end
+    preStartVotes, firstNoName = {}, ""
+    currentVoteTeam, currentVoteLabel = nil, ""
+    lastVote, endAt, voteOpen = 0, 0, false
+    status = reason or "ready"
+end
+
+local function eventInt(event, field)
+    local value
+    pcall(function() value = tonumber(event:GetInt(field)) end)
+    return value
+end
+
+local function eventString(event, field)
+    local value
+    pcall(function() value = event:GetString(field) end)
+    return clean(value)
+end
+
+local function eventBool(event, field)
+    local value
+    pcall(function() value = event:GetBool(field) end)
+    if type(value) == "boolean" then return value end
+    return (eventInt(event, field) or 0) ~= 0
+end
+
+local function entityIndex(entity)
+    local value
+    if not entity then return nil end
+    pcall(function() value = tonumber(entity:GetIndex()) end)
+    return value and value > 0 and value or nil
+end
+
+local function controllerFor(raw)
+    raw = tonumber(raw)
+    if not raw then return nil, nil end
+
+    -- Current CS2 gameevents define vote_cast.userid and
+    -- vote_started.initiator as player-controller entity ids. Resolve that
+    -- exact controller first; treating it as a legacy UserID can select a
+    -- completely different player and therefore the wrong team.
+    local handleIndex = raw % 32768
+    local controllers
+    pcall(function() controllers = entities.FindByClass("CCSPlayerController") end)
+    if type(controllers) == "table" then
+        for i = 1, #controllers do
+            local candidate = entityIndex(controllers[i])
+            if candidate and (candidate == raw or candidate == handleIndex) then
+                return controllers[i], candidate
+            end
+        end
+    end
+
+    -- Compatibility fallback for older/community events that still expose a
+    -- real UserID. Deliberately avoid the former +/-1 heuristic.
+    local index
+    pcall(function()
+        if client and type(client.GetPlayerIndexByUserID) == "function" then
+            index = tonumber(client.GetPlayerIndexByUserID(raw))
+        end
+    end)
+    if index and index > 0 then
+        local entity
+        pcall(function() entity = entities.GetByIndex(index) end)
+        if entity then return entity, index end
+    end
+    return nil, index
+end
+
+local function controllerFieldString(entity, field)
+    local value
+    if not entity then return "" end
+    pcall(function() value = entity:GetFieldString(field) end)
+    return clean(value)
+end
+
+local function voterInfo(raw, eventTeam)
+    raw = tonumber(raw) or 0
+    local entity, index = controllerFor(raw)
+    local name = controllerFieldString(entity, "m_sSanitizedPlayerName")
+    if name == "" then name = controllerFieldString(entity, "m_iszPlayerName") end
+    if name == "CCSPlayerController" then name = "" end
+
+    if not name or name == "" then
+        name = playerNames[raw]
+    end
+    name = clean(name)
+    if name == "" and index then
+        pcall(function()
+            if client and type(client.GetPlayerNameByIndex) == "function" then
+                name = client.GetPlayerNameByIndex(index)
+            end
+        end)
+        name = clean(name)
+    end
+    if name == "" then
+        pcall(function()
+            if client and type(client.GetPlayerNameByUserID) == "function" then
+                name = client.GetPlayerNameByUserID(raw)
+            end
+        end)
+        name = clean(name)
+    end
+    if name == "" or name == "CCSPlayerController" then name = "player" end
+
+    -- The vote event's team is authoritative. Entity lookup is only a
+    -- fallback when the server omitted it; it must never override a valid 2/3.
+    local team = tonumber(eventTeam)
+    if team ~= 2 and team ~= 3 then team = playerTeams[raw] or (index and playerTeams[index]) end
+    if team ~= 2 and team ~= 3 and entity then
+        pcall(function()
+            local value = tonumber(entity:GetFieldInt("m_iTeamNum"))
+            if value == 2 or value == 3 then team = value end
+        end)
+    end
+    if team == 2 or team == 3 then
+        playerTeams[raw] = team
+        if index then playerTeams[index] = team end
+    end
+    local teamName = team == 2 and "T" or (team == 3 and "CT" or "SPEC")
+    return name, teamName, team
+end
+
+local function queueChat(teamName, message)
+    message = clean(message)
+    if message ~= "" then
+        chatQueue[#chatQueue + 1] = { team = teamName, text = message }
+    end
+    if #chatQueue > 24 then table.remove(chatQueue, 1) end
+end
+
+local function upsertVote(key, name, teamName, option)
+    key = tostring(key or (#order + 1))
+    if not active[key] then order[#order + 1] = key end
+    active[key] = {
+        name = name,
+        team = teamName,
+        option = option,
+        alpha = active[key] and active[key].alpha or 0,
+        slide = active[key] and active[key].slide or 80,
+    }
+end
+
+local function voteLabel(issue)
+    local lower = clean(issue):lower()
+    if lower:find("timeout", 1, true) or lower:find("pause", 1, true) then return "TIEMPO MUERTO" end
+    if lower:find("kick", 1, true) then return "EXPULSAR" end
+    if lower:find("surrender", 1, true) then return "RENDIRSE" end
+    if lower:find("restart", 1, true) then return "REINICIAR" end
+    if lower:find("rematch", 1, true) then return "REVANCHA" end
+    if lower:find("changelevel", 1, true) or lower:find("changemap", 1, true) then return "CAMBIAR MAPA" end
+    if lower:find("swap", 1, true) then return "CAMBIAR BANDOS" end
+    if lower ~= "" then return lower:gsub("#", ""):gsub("_", " "):upper() end
+    return "TIPO OCULTO"
+end
+
+M._voteEventCallback = function(event)
+    local name
+    pcall(function() name = event:GetName() end)
+    callbackEvents = callbackEvents + 1
+
+    if name == "server_spawn" or name == "game_newmap" or name == "cs_game_disconnected" then
+        requestListeners()
+        -- A passed change-map vote can emit game_newmap before Draw gets a
+        -- chance to print. Keep those already-resolved local chat messages.
+        clearVote("session rearmed", true)
+        playerNames, playerTeams = {}, {}
+        recentDisconnect = { at = -1000, team = nil, name = "" }
+        bridgeRefreshPending = true
+        writeRuntime("session event", { event = name, callbacks = callbackEvents, preserved = #chatQueue })
+        return
+    end
+    if name == "player_connect" or name == "player_info" then
+        local user = eventInt(event, "userid")
+        local playerName = eventString(event, "name")
+        if user and playerName ~= "" then playerNames[user] = playerName end
+        return
+    end
+    if name == "player_team" or name == "player_disconnect" then
+        local raw = eventInt(event, "userid")
+        if not raw or raw <= 0 then raw = eventInt(event, "entityid") end
+        local eventTeam = eventInt(event, "team")
+        local oldTeam = eventInt(event, "oldteam")
+        local disconnected = name == "player_disconnect" or eventBool(event, "disconnect")
+        if raw and raw > 0 then
+            local playerName, _, resolvedTeam = voterInfo(raw, eventTeam)
+            local team = (oldTeam == 2 or oldTeam == 3) and oldTeam or resolvedTeam
+            if not disconnected and (eventTeam == 2 or eventTeam == 3) then playerTeams[raw] = eventTeam end
+            if disconnected then
+                recentDisconnect = { at = clock(), team = team, name = playerName }
+                writeRuntime("player disconnected", { raw = raw, name = playerName, team = team })
+            end
+        end
+        return
+    end
+    if not armed then return end
+
+    if name == "vote_started" or name == "vote_begin" then
+        active, order, preStartVotes, firstNoName = {}, {}, {}, ""
+        lastVote, endAt, voteOpen = clock(), 0, true
+        local initiator = eventInt(event, "initiator")
+        if not initiator or initiator <= 0 then initiator = eventInt(event, "entityid") end
+        if not initiator or initiator <= 0 then initiator = eventInt(event, "userid") end
+        initiator = initiator or 0
+        local initiatorName, teamName, team = voterInfo(initiator, eventInt(event, "team"))
+        local issue = eventString(event, "issue")
+        local label = voteLabel(issue)
+        currentVoteTeam, currentVoteLabel = team, label
+        local target = eventString(event, "param1")
+        if target == "" then target = eventString(event, "details_str") end
+        status = initiatorName .. " inicio " .. label
+        queueChat(teamName, string.format("%s inicio votacion: %s%s", initiatorName, label,
+            target ~= "" and (" para " .. target) or ""))
+        eventCount = eventCount + 1
+        writeRuntime("vote started", {
+            initiator = initiator, name = initiatorName, team = teamName,
+            issue = issue, label = label, target = target, callbacks = callbackEvents,
+        })
+        return
+    end
+
+    if name == "vote_options" then
+        writeRuntime("vote options", { count = eventInt(event, "count"), callbacks = callbackEvents })
+        return
+    end
+    if name == "vote_changed" then
+        writeRuntime("vote counts changed", {
+            yes = eventInt(event, "vote_option1"), no = eventInt(event, "vote_option2"),
+            potential = eventInt(event, "potentialVotes"), callbacks = callbackEvents,
+        })
+        return
+    end
+
+    if name == "vote_ended" or name == "vote_failed" or name == "vote_passed" then
+        endAt = clock() + DISPLAY_DURATION
+        status = name:gsub("_", " ")
+        local result = name == "vote_passed" and "APROBADA" or (name == "vote_failed" and "RECHAZADA" or "FINALIZADA")
+        local resultTeam = currentVoteTeam == 2 and "T" or (currentVoteTeam == 3 and "CT" or nil)
+        queueChat(resultTeam, "Votacion " .. result .. (currentVoteLabel ~= "" and (": " .. currentVoteLabel) or ""))
+        writeRuntime("vote result", { event = name, result = result })
+        return
+    end
+    if name ~= "vote_cast" then return end
+
+    local raw = eventInt(event, "userid")
+    if not raw or raw <= 0 then raw = eventInt(event, "entityid") end
+    if not raw then return end
+    local option = eventInt(event, "vote_option")
+    if option == nil then option = eventInt(event, "vote") end
+    if option == nil then return end
+
+    local voter, teamName, team = voterInfo(raw, eventInt(event, "team"))
+    local choice = option == 0 and "SI (F1)" or (option == 1 and "NO (F2)" or ("OPCION " .. tostring(option + 1)))
+    if not voteOpen and option == 1 then
+        -- CS2 often sends the kick target's automatic F2 before the caller's
+        -- F1 and omits vote_started. Preserve it until the initiator arrives.
+        firstNoName = firstNoName ~= "" and firstNoName or voter
+        preStartVotes[#preStartVotes + 1] = { team = teamName, name = voter, choice = choice }
+        upsertVote(raw, voter, teamName, option)
+        lastVote, endAt = clock(), 0
+        eventCount = eventCount + 1
+        writeRuntime("vote cast buffered before initiator", {
+            raw = raw, name = voter, team = teamName, option = option, buffered = #preStartVotes,
+        })
+        if PLAY_SOUND then pcall(function() client.Command("play buttons\\button14.wav", true) end) end
+        return
+    end
+    if not voteOpen then
+        voteOpen = true
+        local label
+        if firstNoName ~= "" then
+            label = "EXPULSAR"
+        else
+            local elapsed = clock() - (tonumber(recentDisconnect.at) or -1000)
+            local sameTeam = recentDisconnect.team == nil or team == nil or recentDisconnect.team == team
+            label = elapsed >= 0 and elapsed <= 45 and sameTeam and "RENDIRSE" or "VOTO DE EQUIPO (TIPO OCULTO)"
+        end
+        currentVoteTeam, currentVoteLabel = team, label
+        queueChat(teamName, string.format("%s inicio votacion: %s%s", voter, label,
+            firstNoName ~= "" and (" para " .. firstNoName) or ""))
+        for i = 1, #preStartVotes do
+            local early = preStartVotes[i]
+            queueChat(early.team, string.format("%s voto %s", early.name, early.choice))
+        end
+        preStartVotes = {}
+    end
+    upsertVote(raw, voter, teamName, option)
+    lastVote, endAt = clock(), 0
+    eventCount = eventCount + 1
+    status = voter .. " voto " .. choice
+    queueChat(teamName, string.format("%s voto %s%s", voter, choice,
+        currentVoteLabel ~= "" and (" | " .. currentVoteLabel) or ""))
+    writeRuntime("vote cast", { raw = raw, name = voter, team = teamName, option = option, choice = choice })
+    if PLAY_SOUND then pcall(function() client.Command("play buttons\\button14.wav", true) end) end
+end
+
+local font
+pcall(function() font = draw.CreateFont("Segoe UI", 13, 500, false, true) end)
+
+local function sendQueued(t)
+    if #chatQueue == 0 then return end
+    local count = 0
+    while #chatQueue > 0 and count < 8 do
+        local entry = table.remove(chatQueue, 1)
+        if type(entry) ~= "table" then entry = { text = tostring(entry or "") } end
+        local message, teamName = clean(entry.text), entry.team
+        local plainMarker = teamName == "T" and "(T) " or (teamName == "CT" and "(CT) " or "")
+        local prefixColor, reset = string.char(14), string.char(1)
+        -- Explicit HUD colors: red for Terrorists and blue for Counter-Terrorists.
+        -- Reset immediately after the marker so the vote description stays readable.
+        local teamColor = teamName == "T" and string.char(2) or (teamName == "CT" and string.char(11) or reset)
+        local colorMarker = teamName == "T" and "(T)" or (teamName == "CT" and "(CT)" or "")
+        local formatted = prefixColor .. "[rgnVotes] " .. reset
+        if colorMarker ~= "" then formatted = formatted .. teamColor .. colorMarker .. reset .. " " end
+        formatted = formatted .. message
+        M._voteLastFormattedChat = formatted
+        M._voteLastPlainChat = plainMarker .. message
+        M._voteLastTeam = teamName
+        local ok = false
+        if type(localChatPrint) == "function" then
+            ok = localChatPrint(formatted) == true
+        end
+        if not ok then print("[rgnVotes/local] " .. plainMarker .. message) end
+        localPrintCount = localPrintCount + 1
+        M._voteLocalPrintCount = localPrintCount
+        count = count + 1
+    end
+    if count > 0 then
+        writeRuntime("local chat flushed", {
+            count = count,
+            total = localPrintCount,
+            remaining = #chatQueue,
+            chat = localChatStatus,
+        })
+    end
+end
+
+local function renderVotes()
+    if #order == 0 then return end
+    local sw, sh = draw.GetScreenSize()
+    local width, lineHeight = 248, 40
+    local x = sw - width - 18
+    local y = math.floor(sh * 0.50 - (#order * lineHeight) * 0.50)
+    local frame = 1 / 60
+    pcall(function() frame = math.min(0.05, math.max(0.001, globals.FrameTime())) end)
+    if font then pcall(function() draw.SetFont(font) end) end
+
+    for i = 1, #order do
+        local item = active[order[i]]
+        if item then
+            item.alpha = math.min(1, (item.alpha or 0) + frame * 5)
+            item.slide = math.max(0, (item.slide or 0) - frame * 260)
+            local px, py, a = x + item.slide, y + (i - 1) * lineHeight, item.alpha
+            local yes = item.option == 0
+            local r, g, b = yes and 50 or 245, yes and 205 or 75, yes and 120 or 85
+            draw.Color(8, 12, 18, math.floor(225 * a))
+            draw.RoundedRectFill(px, py, px + width, py + 34, 6)
+            draw.Color(r, g, b, math.floor(255 * a))
+            draw.FilledRect(px, py, px + 4, py + 34)
+            draw.Color(235, 239, 246, math.floor(255 * a))
+            local label = item.name
+            if #label > 25 then label = label:sub(1, 24) .. "..." end
+            draw.Text(px + 12, py + 4, label)
+            draw.Color(145, 155, 170, math.floor(255 * a))
+            draw.Text(px + 12, py + 19, SHOW_TEAM and (item.team .. "  |  voter") or "voter")
+            draw.Color(r, g, b, math.floor(255 * a))
+            draw.Text(px + width - 58, py + 10, yes and "F1 YES" or (item.option == 1 and "F2 NO" or ("OPT " .. tostring(item.option + 1))))
+        end
+    end
+end
+
+M._voteDrawCallback = function()
+    local t = clock()
+    if t >= nextListenerRefresh then
+        nextListenerRefresh = t + 2.0
+        requestListeners()
+    end
+    if t >= nextSessionPoll then
+        nextSessionPoll = t + 0.50
+        local key = sessionKey()
+        if lastSessionKey == nil then lastSessionKey = key
+        elseif key ~= lastSessionKey then
+            lastSessionKey = key
+            requestListeners()
+            clearVote("session rearmed", true)
+            bridgeRefreshPending = true
+        end
+    end
+    if bridgeRefreshPending and type(refreshVoteBridge) == "function" then
+        bridgeRefreshPending = false
+        refreshVoteBridge("session transition")
+    end
+    sendQueued(t)
+    if lastVote > 0 and endAt == 0 and t - lastVote > 2.0 then endAt = t + DISPLAY_DURATION end
+    if endAt > 0 and t >= endAt then clearVote("ready"); return end
+    renderVotes()
+end
+
+pcall(function() callbacks.Unregister("Draw", "rgnMultitool_VoteDraw") end)
+pcall(function() callbacks.Unregister("FireGameEvent", "rgnMultitool_VoteEvents") end)
+local drawGeneration = (tonumber(rawget(_G, "RGN_VOTE_DRAW_GENERATION")) or 0) + 1
+rawset(_G, "RGN_VOTE_DRAW_GENERATION", drawGeneration)
+callbacks.Register("Draw", function()
+    if rawget(_G, "RGN_VOTE_DRAW_GENERATION") ~= drawGeneration then return end
+    drawCallbacks = drawCallbacks + 1
+    if type(M._voteDrawCallback) == "function" then
+        local ok, err = pcall(M._voteDrawCallback)
+        if not ok then writeRuntime("draw callback error", { error = tostring(err), draws = drawCallbacks }) end
+    end
+end)
+requestListeners()
+lastSessionKey = sessionKey()
+initLocalChat()
+writeRuntime("module loaded", { session = lastSessionKey, chat = localChatStatus })
+
+refreshVoteBridge = function(reason)
+    local generation = (tonumber(rawget(_G, "RGN_VOTE_GENERATION")) or 0) + 1
+    rawset(_G, "RGN_VOTE_GENERATION", generation)
+    local registered = pcall(function()
+        -- Aimware v6 reliably delivers these events through the anonymous
+        -- two-argument registration used by the original Vote Reveal script.
+        callbacks.Register("FireGameEvent", function(event)
+            if rawget(_G, "RGN_VOTE_GENERATION") ~= generation then return end
+            if type(M._voteEventCallback) == "function" then
+                local ok, err = pcall(M._voteEventCallback, event)
+                if not ok then
+                    print("[rgnVotes] event error: " .. tostring(err))
+                    writeRuntime("callback error", { error = tostring(err), generation = generation })
+                end
+            end
+        end)
+    end)
+    writeRuntime(registered and "callback registered" or "callback registration failed", {
+        reason = reason or "manual",
+        generation = generation,
+    })
+    return registered
+end
+
+refreshVoteBridge("module load")
+
+print("[rgnVotes] built-in service loaded | always on | local chat + overlay")
+end)
+
 do
-    local wanted = { "WEAPONS", "AGENTS", "SKINS CUSTOM", "VIEWMODEL", "CONFIGS" }
+    local wanted = { "WEAPONS", "AGENTS", "SKINS CUSTOM", "VIEWMODEL", "MOVEMENT", "IDENTITY", "KILLSAY", "CONFIGS" }
     local byName, ordered = {}, {}
     for _, tab in ipairs(M._tabs) do byName[tab.name] = tab end
     for _, name in ipairs(wanted) do
@@ -6420,4 +9400,4 @@ do
 end
 
 M:Build({ w = 940, h = 560, autoH = false, resize = true })
-print("[rgnMultitool] ready: Weapons, Agents, Skins Custom, Viewmodel and Configs")
+print("[rgnMultitool] ready: Weapons, Agents, Skins Custom, Viewmodel, Movement, Killsay and Configs")
