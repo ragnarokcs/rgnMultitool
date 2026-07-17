@@ -38,17 +38,20 @@ Source-visible Aimware Lua toolkit for CS2. Every module lives in one compact me
 
 - Event-driven cosmetic engine with sparse maintenance work for reduced frame-time impact.
 - Automatic session rearming when joining another server or changing maps.
-- Local configuration files only; no user-specific Windows paths are embedded.
+- One generated `rgnMultitool_data.txt` container for settings, profiles and the validated offline source; no user-specific Windows paths are embedded.
+- Debounced persistence and in-memory diagnostics avoid per-frame log/config writes.
 - Built-in update check with source-size, signature, version and Lua syntax validation.
 
-The distributed `loader.lua` checks the small `version.txt` manifest on startup. It downloads the full source only when the published version changes, validates the release signature and Lua syntax, then keeps a local offline cache. Updates are never hot-loaded while a match is running; use **CONFIGS > Check for updates**, then run the Lua again.
+The distributed `loader.lua` checks the small `version.txt` manifest on startup. It downloads the full source only when the published version changes, validates the release signature and Lua syntax, then stores it with all module settings in `rgnMultitool_data.txt`. Updates are never hot-loaded while a match is running; use **CONFIGS > Check for updates**, then run the Lua again.
+
+Version 1.2 automatically migrates prior module settings and updater caches. Installations using the original public filename also upgrade the validated `loader.lua` on the first 1.2 run; the following run uses unified storage permanently.
 
 ## Installation
 
 1. Download `loader.lua` and place it in Aimware's Lua scripts folder.
 2. In Aimware Lua permissions, allow internet connections and editing Lua files.
 3. Run `loader.lua`.
-4. Keep only one rgnMultitool loader/source active at a time.
+4. Keep only one rgnMultitool loader/source active at a time. The Lua creates only `rgnMultitool_data.txt` for its persistent data.
 
 The loader and full source use relative data filenames and contain no Windows username or PC-specific installation path.
 
@@ -61,7 +64,7 @@ Before replacing its cache, the loader verifies:
 - the source version matches the manifest;
 - `loadstring` can compile the complete source.
 
-If GitHub is unavailable, the last validated cache is used. The source is intentionally published in full so users can inspect it before running it.
+If GitHub is unavailable, the last validated source inside the unified container is used. The source is intentionally published in full so users can inspect it before running it.
 
 ## Credits
 
