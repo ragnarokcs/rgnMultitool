@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.1 - 2026-07-17
+
+### Emergency stability hotfix
+
+- Disabled the built-in vote revealer after two crash dumps identified its recursive Draw callback as the repeated stack-overflow path.
+- Preserved cosmetics, agents, custom characters, viewmodel, movement, Identity, Killsay and saved configurations unchanged.
+- Restored the proven per-file cache/configuration path from 1.1.0 and removed the 1.2.0 unified-storage release.
+
 ## 1.1.0 - 2026-07-16
 
 ### Added
