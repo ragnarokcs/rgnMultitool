@@ -1,6 +1,6 @@
--- rgnMultitool v1.1.0: cosmetics, movement, identity, Killsay and local vote information.
+-- rgnMultitool v1.1.1: emergency stability hotfix for the vote Draw callback.
 -- Optimized event engine with session rearming and safe modern/legacy finish flow.
-local RGN_MULTITOOL_VERSION = "1.1.0"
+local RGN_MULTITOOL_VERSION = "1.1.1"
 local RGN_MULTITOOL_SIGNATURE = "RGN_MULTITOOL_SOURCE_V1"
 _G.RGN_MULTITOOL_VERSION = RGN_MULTITOOL_VERSION
 pcall(function()
@@ -8815,6 +8815,10 @@ writeRuntime("module loaded")
 print("[rgnIdentity] loaded | custom name + scoreboard prefix | safe engine2 validation")
 end)
 
+-- Disabled after two independent dumps showed the same recursive Draw path
+-- exhausting CS2's stack. Keep the implementation source-visible for a later
+-- event-only rewrite, but never register its FFI/chat/Draw hooks in this build.
+if false then
 loadModule("VOTES", function()
 -- rgnMultitool vote revealer.
 -- Uses documented game events and ordinary entity APIs. The only FFI call is
@@ -9387,6 +9391,7 @@ refreshVoteBridge("module load")
 
 print("[rgnVotes] built-in service loaded | always on | local chat + overlay")
 end)
+end
 
 do
     local wanted = { "WEAPONS", "AGENTS", "SKINS CUSTOM", "VIEWMODEL", "MOVEMENT", "IDENTITY", "KILLSAY", "CONFIGS" }

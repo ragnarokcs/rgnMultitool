@@ -27,12 +27,10 @@ Source-visible Aimware Lua toolkit for CS2. Every module lives in one compact me
 - Killsay with multilingual message packs, random/sequential order, custom templates and optional victim names.
 - Identity and Killsay features are opt-in and disabled by default.
 
-### Vote information
+### Vote information (temporarily disabled)
 
-- Built-in vote start, choice and result information in a local-only HUD chat feed.
-- Voter overlay with F1/F2 choices.
-- Terrorist `(T)` labels in red and Counter-Terrorist `(CT)` labels in blue.
-- Correct controller/team resolution and surrender reconstruction after a teammate disconnects.
+- The previous Draw/FFI implementation is disabled in 1.1.1 after crash dumps identified a recursive stack-overflow path.
+- It will return only after an event-only implementation is validated without native chat or Draw-hook re-entry.
 
 ### Reliability
 
