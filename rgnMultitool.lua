@@ -1,6 +1,6 @@
--- rgnMultitool v1.2.0: cosmetics, movement, identity, Killsay and local vote information.
+-- rgnMultitool v1.1.0: cosmetics, movement, identity, Killsay and local vote information.
 -- Optimized event engine with session rearming and safe modern/legacy finish flow.
-local RGN_MULTITOOL_VERSION = "1.2.0"
+local RGN_MULTITOOL_VERSION = "1.1.0"
 local RGN_MULTITOOL_SIGNATURE = "RGN_MULTITOOL_SOURCE_V1"
 _G.RGN_MULTITOOL_VERSION = RGN_MULTITOOL_VERSION
 pcall(function()
@@ -2194,207 +2194,22 @@ local __chunk, __err = loadstring(__RGN_GUILIB, "=rgnMultitool_guilib.lua")
 if not __chunk then print("[rgnMultitool] UI compile error: " .. tostring(__err)); return end
 local __ok, M = pcall(__chunk)
 if not __ok or type(M) ~= "table" then print("[rgnMultitool] UI load error: " .. tostring(M)); return end
-
--- Unified persistence. The loader and every module share one length-prefixed
--- container, so multiline profiles and the cached Lua source need no escaping.
--- Writes are debounced because the updater source is intentionally kept in the
--- same file; many slider changes therefore produce one disk write, not dozens.
-local STORE_FILE, STORE_MAGIC = "rgnMultitool_data.txt", "RGN_MULTITOOL_DATA_V1\n"
-local Store = rawget(_G, "RGN_MULTITOOL_STORE")
-if type(Store) ~= "table" or Store.file ~= STORE_FILE or Store.serializerVersion ~= 2 then
-    Store = { file = STORE_FILE, entries = {}, dirty = false, serializerVersion = 2 }
-    function Store.rawRead(path)
-        local data
-        pcall(function()
-            local f = file.Open(path, "r")
-            if f then data = f:Read(); f:Close() end
-        end)
-        return data
-    end
-    function Store.rawDelete(path)
-        pcall(function() if file and type(file.Delete) == "function" then file.Delete(path) end end)
-    end
-    local raw = Store.rawRead(STORE_FILE)
-    if type(raw) == "string" and raw:sub(1, #STORE_MAGIC) == STORE_MAGIC then
-        local pos = #STORE_MAGIC + 1
-        while pos <= #raw do
-            local lineEnd = raw:find("\n", pos, true)
-            if not lineEnd then break end
-            local keyLen, valueLen = raw:sub(pos, lineEnd - 1):match("^(%d+):(%d+)$")
-            keyLen, valueLen = tonumber(keyLen), tonumber(valueLen)
-            if not keyLen or not valueLen then break end
-            local keyStart = lineEnd + 1
-            local keyEnd = keyStart + keyLen - 1
-            local valueStart = keyEnd + 1
-            local valueEnd = valueStart + valueLen - 1
-            if valueEnd > #raw then break end
-            Store.entries[raw:sub(keyStart, keyEnd)] = raw:sub(valueStart, valueEnd)
-            pos = valueEnd + 1
-        end
-    end
-    function Store.read(key) return Store.entries[tostring(key)] end
-    function Store.write(key, value)
-        Store.entries[tostring(key)] = tostring(value or "")
-        Store.dirty = true
-        return true
-    end
-    function Store.delete(key)
-        Store.entries[tostring(key)] = nil
-        Store.dirty = true
-        return true
-    end
-    function Store.flush()
-        if not Store.dirty then return true end
-        local keys, parts = {}, { STORE_MAGIC }
-        for key in pairs(Store.entries) do keys[#keys + 1] = key end
-        table.sort(keys)
-        for i = 1, #keys do
-            local key, value = keys[i], tostring(Store.entries[keys[i]] or "")
-            parts[#parts + 1] = tostring(#key) .. ":" .. tostring(#value) .. "\n" .. key .. value
-        end
-        local ok = false
-        pcall(function()
-            local f = file.Open(STORE_FILE, "w")
-            if f then f:Write(table.concat(parts)); f:Close(); ok = true end
-        end)
-        if ok then Store.dirty = false end
-        return ok
-    end
-    _G.RGN_MULTITOOL_STORE = Store
-end
-
-local function storeClock()
-    local value = 0
-    pcall(function()
-        if common and type(common.Time) == "function" then value = common.Time()
-        elseif globals and type(globals.RealTime) == "function" then value = globals.RealTime()
-        elseif globals and type(globals.CurTime) == "function" then value = globals.CurTime() end
-    end)
-    return tonumber(value) or 0
-end
-
-if not Store.runtimeReady then
-    Store.runtimeReady = true
-    local baseWrite, baseDelete = Store.write, Store.delete
-    function Store.write(key, value, immediate)
-        baseWrite(key, value)
-        Store.flushAt = storeClock() + 1.5
-        return immediate and Store.flush() or true
-    end
-    function Store.delete(key, immediate)
-        baseDelete(key)
-        Store.flushAt = storeClock() + 1.5
-        return immediate and Store.flush() or true
-    end
-    function Store.tick()
-        if Store.dirty and storeClock() >= (tonumber(Store.flushAt) or 0) then Store.flush() end
-    end
-end
-
-local migratedFiles = {}
-
--- Users upgrading through the v1.1 loader arrive here with its validated source
--- and version in two legacy files. Import them before deleting either file, so
--- the next startup is already offline-capable with the unified loader.
-local legacyUpdaterSource = Store.rawRead("rgnMultitool_source_cache.txt")
-local legacyUpdaterVersion = Store.rawRead("rgnMultitool_local_version.txt")
-local legacyVersion = type(legacyUpdaterVersion) == "string"
-    and legacyUpdaterVersion:match("version%s*=%s*([^%s]+)") or nil
-if Store.read("updater.source") == nil
-    and type(legacyUpdaterSource) == "string" and #legacyUpdaterSource >= 250000
-    and legacyUpdaterSource:find("RGN_MULTITOOL_SOURCE_V1", 1, true)
-    and legacyVersion == RGN_MULTITOOL_VERSION
-    and legacyUpdaterSource:find('local RGN_MULTITOOL_VERSION = "' .. RGN_MULTITOOL_VERSION .. '"', 1, true) then
-    Store.write("updater.source", legacyUpdaterSource)
-    Store.write("updater.version", legacyVersion)
-end
-if Store.read("updater.source") ~= nil then
-    if Store.rawRead("rgnMultitool_source_cache.txt") ~= nil then
-        migratedFiles[#migratedFiles + 1] = "rgnMultitool_source_cache.txt"
-    end
-    if Store.rawRead("rgnMultitool_local_version.txt") ~= nil then
-        migratedFiles[#migratedFiles + 1] = "rgnMultitool_local_version.txt"
-    end
-end
-
-local legacySettings = {
-    { "rgnmultitool_custom_enabled.txt" }, { "rgnskins_character.txt" },
-    { "rgnmultitool_viewmodel.txt" }, { "rgnweapons_config.txt" },
-    { "awchanger.txt", "rgnweapons_config.txt" }, { "rgnweapons_profile_names.txt" },
-    { "rgnweapons_profile_1.txt" }, { "rgnweapons_profile_2.txt" },
-    { "rgnweapons_profile_3.txt" }, { "rgnweapons_profile_4.txt" },
-    { "rgnweapons_profile_5.txt" }, { "rgnmovement_config_v2.txt" },
-    { "rgnkillsay_config.txt" }, { "rgnidentity_config.txt" },
-}
-for i = 1, #legacySettings do
-    local legacy, key = legacySettings[i][1], legacySettings[i][2] or legacySettings[i][1]
-    if Store.read(key) == nil then
-        local value = Store.rawRead(legacy)
-        if type(value) == "string" then
-            Store.write(key, value)
-            migratedFiles[#migratedFiles + 1] = legacy
-        end
-    elseif Store.rawRead(legacy) ~= nil then
-        migratedFiles[#migratedFiles + 1] = legacy
-    end
-end
-if #migratedFiles > 0 and Store.flush() then
-    for i = 1, #migratedFiles do Store.rawDelete(migratedFiles[i]) end
-end
-for _, obsolete in ipairs({
-    "rgnweapons_preview_engine_cache.lua", "rgnkillsay_runtime.txt",
-    "rgnidentity_runtime.txt", "rgnvotes_runtime.txt", "rgnmultitool_boot_status.txt",
-    "rgnmovement_config.txt", "rgnmisc_config.txt", "rgnlegacyskins_config.txt",
-    "rgnallskins_config.txt", "rgnskins_rejected_models.txt",
-}) do Store.rawDelete(obsolete) end
-
--- One-time bootstrap for installations still launching the public v1.1
--- loader.lua. The new loader is accepted only from this repository and only
--- after signature, size and Lua syntax checks. Renamed loaders are left alone.
-local function upgradeLegacyLoader()
-    local updater = rawget(_G, "RGN_MULTITOOL_UPDATER")
-    if type(updater) ~= "table" or updater.storage_version == 2 then return end
-    local base = rawget(_G, "RGN_MULTITOOL_BASE")
-    if type(base) ~= "string"
-        or not base:find("raw.githubusercontent.com/ragnarokcs/rgnMultitool/", 1, true) then return end
-    local current = Store.rawRead("loader.lua")
-    if type(current) ~= "string"
-        or not current:find("rgnMultitool loader/update client", 1, true) then return end
-    local candidate
-    pcall(function() candidate = http.Get(base .. "loader.lua?unified=" .. tostring({}):gsub("%W", "")) end)
-    if type(candidate) ~= "string" or #candidate < 8000 or #candidate > 20000 then
-        pcall(function() candidate = http.Get(base .. "loader.lua") end)
-    end
-    if type(candidate) ~= "string" or #candidate < 8000 or #candidate > 20000
-        or not candidate:find("RGN_MULTITOOL_LOADER_V2", 1, true)
-        or not candidate:find('local REPO = "rgnMultitool"', 1, true) then return end
-    local chunk = loadstring(candidate, "=rgnMultitool_loader_update.lua")
-    if not chunk then return end
-    pcall(function()
-        local handle = file.Open("loader.lua", "w")
-        if handle then
-            handle:Write(candidate)
-            handle:Close()
-            print("[rgnMultitool] unified loader installed; it will be used on the next Run")
-        end
-    end)
-end
-pcall(upgradeLegacyLoader)
-
-M:OnFrame(function() Store.tick() end)
-pcall(function()
-    callbacks.Register("Unload", "rgnMultitool_StoreUnload", function() Store.flush() end)
-end)
-
 local RGN_MULTI = rawget(_G, "RGN_MULTITOOL_STATE") or {}
 local CUSTOM_MODE_FILE = "rgnmultitool_custom_enabled.txt"
 local function loadCustomEnabled()
-    local value = Store.read(CUSTOM_MODE_FILE)
+    local value
+    pcall(function()
+        local f = file.Open(CUSTOM_MODE_FILE, "r")
+        if f then value = f:Read(); f:Close() end
+    end)
     if type(value) ~= "string" then return true end
     return value:match("^%s*1%s*$") ~= nil
 end
 local function saveCustomEnabled(enabled)
-    Store.write(CUSTOM_MODE_FILE, enabled and "1" or "0")
+    pcall(function()
+        local f = file.Open(CUSTOM_MODE_FILE, "w")
+        if f then f:Write(enabled and "1" or "0"); f:Close() end
+    end)
 end
 
 RGN_MULTI.customEnabled = loadCustomEnabled()
@@ -2630,11 +2445,20 @@ else
     end
 
     local function savePath(path)
-        return Store.write(MODEL_CONFIG_FILE, path or "")
+        local ok = false
+        pcall(function()
+            local f = file.Open(MODEL_CONFIG_FILE, "w")
+            if f then f:Write(path or ""); f:Close(); ok = true end
+        end)
+        return ok
     end
 
     local function loadPath()
-        local value = Store.read(MODEL_CONFIG_FILE)
+        local value
+        pcall(function()
+            local f = file.Open(MODEL_CONFIG_FILE, "r")
+            if f then value = f:Read(); f:Close() end
+        end)
         if type(value) ~= "string" then return nil end
         value = value:gsub("^%s+", ""):gsub("%s+$", ""):gsub("\\", "/")
         return value:lower():match("%.vmdl$") and value or nil
@@ -3201,8 +3025,9 @@ end
 local function loadConfig()
     local values = {}
     pcall(function()
-        local data = Store.read(CONFIG_FILE)
-        if type(data) ~= "string" then return end
+        local handle = file.Open(CONFIG_FILE, "r")
+        if not handle then return end
+        local data = handle:Read(); handle:Close()
         for line in tostring(data or ""):gmatch("[^\r\n]+") do
             local key, value = line:match("^([%w_]+)=(.*)$")
             if key then values[key] = value end
@@ -3462,7 +3287,12 @@ local function saveConfig()
         "enabled=" .. (enabled:Get() and "1" or "0"),
         "x=" .. tostring(x), "y=" .. tostring(y), "z=" .. tostring(z),
     }, "\n")
-    return Store.write(CONFIG_FILE, data)
+    local ok = false
+    pcall(function()
+        local handle = file.Open(CONFIG_FILE, "w")
+        if handle then handle:Write(data); handle:Close(); ok = true end
+    end)
+    return ok
 end
 
 local function apply(force)
@@ -3578,7 +3408,10 @@ pcall(function() callbacks.Unregister("Draw", "rgnWEAPONS_LateMesh") end)
 -- Pin the repository revision inspected for this build. Its preview changer
 -- contains the current weapon/viewmodel mesh handling; character code is
 -- disabled below before the engine is executed.
+local ENGINE_REV = "957eedf27b832e505656475ee57f91b3b14b4340"
+local ENGINE_URL = "https://raw.githubusercontent.com/cachorropacoca/aw_cs2v6_femboytap/" .. ENGINE_REV .. "/preview/femboytap_changer.lua"
 local OFFSETS_URL = "https://raw.githubusercontent.com/a2x/cs2-dumper/main/output/offsets.json"
+local ENGINE_CACHE = "rgnweapons_preview_engine_cache.lua"
 local ENGINE_MIN_SIZE = 90000
 local EMBEDDED_ENGINE = [====[
 local ffi  = ffi
@@ -4814,19 +4647,21 @@ end
 local CFG_FILE = "awchanger.txt"
 
 local function file_write(path, data)
-    local store = rawget(_G, "RGN_MULTITOOL_STORE")
-    if type(store) == "table" and type(store.write) == "function" then
-        return store.write(path, data)
-    end
-    return false
+    local ok = false
+    pcall(function()
+        local f = file.Open(path, "w")
+        if f then f:Write(data); f:Close(); ok = true end
+    end)
+    return ok
 end
 
 local function file_read(path)
-    local store = rawget(_G, "RGN_MULTITOOL_STORE")
-    if type(store) == "table" and type(store.read) == "function" then
-        return store.read(path)
-    end
-    return nil
+    local data
+    pcall(function()
+        local f = file.Open(path, "r")
+        if f then data = f:Read(); f:Close() end
+    end)
+    return data
 end
 
 function Config.serialize()
@@ -4996,10 +4831,7 @@ end
 
 function C.clearConfig()
     C.resetAll()
-    local store = rawget(_G, "RGN_MULTITOOL_STORE")
-    if type(store) == "table" and type(store.delete) == "function" then
-        store.delete(CFG_FILE)
-    end
+    pcall(function() file.Delete(CFG_FILE) end)
     return "config cleared"
 end
 
@@ -5095,14 +4927,38 @@ return C
 ]====]
 
 local function readFile(path)
-    return Store.read(path)
+    local data
+    pcall(function()
+        local f = file.Open(path, "r")
+        if f then data = f:Read(); f:Close() end
+    end)
+    return data
 end
 
 local function writeFile(path, data)
-    return Store.write(path, data)
+    local ok = false
+    pcall(function()
+        local f = file.Open(path, "w")
+        if f then f:Write(data); f:Close(); ok = true end
+    end)
+    return ok
 end
 
 local function fetchEngine()
+    local source
+    if type(http) == "table" and type(http.Get) == "function" then
+        pcall(function()
+            source = http.Get(ENGINE_URL .. "?rgn=" .. tostring({}):gsub("%W", ""))
+        end)
+        if type(source) ~= "string" or #source < ENGINE_MIN_SIZE then
+            pcall(function() source = http.Get(ENGINE_URL) end)
+        end
+        if type(source) == "string" and #source >= ENGINE_MIN_SIZE then
+            return source, "GitHub"
+        end
+    end
+    source = readFile(ENGINE_CACHE)
+    if type(source) == "string" and #source >= ENGINE_MIN_SIZE then return source, "cache" end
     if type(EMBEDDED_ENGINE) == "string" and #EMBEDDED_ENGINE >= ENGINE_MIN_SIZE then
         return EMBEDDED_ENGINE, "embedded portable"
     end
@@ -6238,8 +6094,17 @@ else
     if not source then
         engineError = where
     else
-        local prepared
-        prepared, engineError = prepareEngine(source)
+        local rawSource, prepared = source, nil
+        prepared, engineError = prepareEngine(rawSource)
+        if not prepared and where == "GitHub" then
+            local cached = readFile(ENGINE_CACHE)
+            if type(cached) == "string" and #cached >= ENGINE_MIN_SIZE then
+                local cachedPrepared, cachedError = prepareEngine(cached)
+                if cachedPrepared then prepared, engineError, where = cachedPrepared, nil, "cache" else engineError = cachedError end
+            end
+        elseif prepared and where == "GitHub" then
+            writeFile(ENGINE_CACHE, rawSource)
+        end
         if prepared then
             local chunk, compileError = loadstring(prepared, "=rgnweapons_engine.lua")
             if not chunk then
@@ -6556,7 +6421,7 @@ profileSection:Button("Load selected profile", function()
 end)
 profileSection:Button("Delete selected profile", function()
     local slot = profileSlot:Get() or 1
-    Store.delete(profilePath(slot))
+    pcall(function() file.Delete(profilePath(slot)) end)
     profileNames[slot] = "Profile " .. tostring(slot)
     profileName:Set(profileNames[slot])
     saveProfileNames()
@@ -6801,7 +6666,10 @@ end
 
 local config = {}
 pcall(function()
-    local raw = Store.read(CONFIG_FILE) or ""
+    local f = file.Open(CONFIG_FILE, "r")
+    if not f then return end
+    local raw = f:Read() or ""
+    f:Close()
     for line in raw:gmatch("[^\r\n]+") do
         local key, value = line:match("^([%w_]+)=(.*)$")
         if key then config[key] = value end
@@ -7371,6 +7239,8 @@ end
 
 local function saveSettings()
     pcall(function()
+        local f = file.Open(CONFIG_FILE, "w")
+        if not f then return end
         local lines = {
             "velocity=" .. (velocityEnabled:Get() and "1" or "0"),
             "velocity_color=" .. colorText(velocityColor:Get()),
@@ -7387,7 +7257,8 @@ local function saveSettings()
             "null_binds=" .. (nullEnabled:Get() and "1" or "0"),
             "debug=" .. (debugEnabled:Get() and "1" or "0"),
         }
-        Store.write(CONFIG_FILE, table.concat(lines, "\n"))
+        f:Write(table.concat(lines, "\n"))
+        f:Close()
     end)
 end
 
@@ -7733,7 +7604,10 @@ end
 
 local config = {}
 pcall(function()
-    local raw = Store.read(CONFIG_FILE) or ""
+    local handle = file.Open(CONFIG_FILE, "r")
+    if not handle then return end
+    local raw = handle:Read() or ""
+    handle:Close()
     for line in tostring(raw):gmatch("[^\r\n]+") do
         local key, value = line:match("^([%w_]+)=(.*)$")
         if key then config[key] = value end
@@ -7786,6 +7660,7 @@ local lastDeathSignature, lastDeathAt = nil, -100
 local eventKillCredits = 0
 local lastTestAt = -100
 local awaitingChat, chatConfirmed, chatTimeouts = nil, 0, 0
+local RUNTIME_FILE = "rgnkillsay_runtime.txt"
 local callbackEvents = 0
 local runtimeHistory = {}
 local armed = false
@@ -7836,9 +7711,29 @@ local function writeRuntime(reason, values)
         )
         if #runtimeHistory > 16 then table.remove(runtimeHistory, 1) end
 
-        -- Diagnostics stay in memory and the Aimware console. Persisting this
-        -- high-frequency status created needless files and disk traffic.
-        M._killsayRuntimeHistory = runtimeHistory
+        local handle = file.Open(RUNTIME_FILE, "w")
+        if not handle then return end
+        local lines = {
+            "reason=" .. cleanChatText(reason),
+            "callback_events=" .. tostring(callbackEvents),
+            "enabled=" .. (enabled:Get() and "1" or "0"),
+            "armed=" .. (armed and "1" or "0"),
+            "death_events=" .. tostring(deathEvents),
+            "local_kills=" .. tostring(localKills),
+            "pending=" .. tostring(#pending),
+            "send_method=" .. cleanChatText(sendMethod),
+            "history_count=" .. tostring(#runtimeHistory),
+        }
+        if type(values) == "table" then
+            for key, value in pairs(values) do
+                lines[#lines + 1] = cleanChatText(key) .. "=" .. cleanChatText(value)
+            end
+        end
+        for i = 1, #runtimeHistory do
+            lines[#lines + 1] = "history_" .. tostring(i) .. "=" .. runtimeHistory[i]
+        end
+        handle:Write(table.concat(lines, "\n"))
+        handle:Close()
     end)
 end
 
@@ -7977,6 +7872,8 @@ end)
 
 local function saveConfig()
     pcall(function()
+        local handle = file.Open(CONFIG_FILE, "w")
+        if not handle then return end
         local lines = {
             "enabled=0",
             "pack_catalog=2",
@@ -7986,7 +7883,8 @@ local function saveConfig()
             "chat_interval=" .. tostring(delay:Get()),
             "custom=" .. cleanChatText(customMessage:Get()),
         }
-        Store.write(CONFIG_FILE, table.concat(lines, "\n"))
+        handle:Write(table.concat(lines, "\n"))
+        handle:Close()
     end)
 end
 
@@ -8496,6 +8394,7 @@ local M = M
 -- This module follows the working engine2.dll name-ConVar route from the
 -- Aimware reference, but validates every signature and pointer before use.
 local CONFIG_FILE = "rgnidentity_config.txt"
+local RUNTIME_FILE = "rgnidentity_runtime.txt"
 local ENGINE_DLL = "engine2.dll"
 local CVAR_PATTERN = "48 8B 0D ?? ?? ?? ?? 48 8B 16 48 89 7C 24 ?? 4C 89 4C 24 ??"
 local RESOLVE_PATTERN = "48 8B D3 E8 ?? ?? ?? ?? 48 8B 44 24"
@@ -8531,7 +8430,10 @@ end
 
 local config = {}
 pcall(function()
-    local raw = Store.read(CONFIG_FILE) or ""
+    local handle = file.Open(CONFIG_FILE, "r")
+    if not handle then return end
+    local raw = handle:Read() or ""
+    handle:Close()
     for line in tostring(raw):gmatch("[^\r\n]+") do
         local key, value = line:match("^([%w_]+)=(.*)$")
         if key then config[key] = value end
@@ -8600,7 +8502,20 @@ local function writeRuntime(reason, values)
         end
         runtimeHistory[#runtimeHistory + 1] = clean(reason, 80) .. "|" .. table.concat(details, ",")
         if #runtimeHistory > 12 then table.remove(runtimeHistory, 1) end
-        M._identityRuntimeHistory = runtimeHistory
+        local handle = file.Open(RUNTIME_FILE, "w")
+        if not handle then return end
+        local lines = {
+            "reason=" .. clean(reason, 80),
+            "status=" .. clean(status, 100),
+            "patch_ready=" .. (patchReady and "1" or "0"),
+            "captured=" .. (captured and "1" or "0"),
+            "changed=" .. (changed and "1" or "0"),
+            "original=" .. clean(originalName, 64),
+            "last_applied=" .. clean(lastApplied or "", 64),
+        }
+        for i = 1, #runtimeHistory do lines[#lines + 1] = "history_" .. i .. "=" .. runtimeHistory[i] end
+        handle:Write(table.concat(lines, "\n"))
+        handle:Close()
     end)
 end
 
@@ -8618,7 +8533,15 @@ local function saveConfig()
         "original_name=" .. clean(originalName, 64),
         "last_applied=" .. clean(lastApplied or storedLastApplied, 64),
     }
-    return Store.write(CONFIG_FILE, table.concat(values, "\n"))
+    local ok = false
+    pcall(function()
+        local handle = file.Open(CONFIG_FILE, "w")
+        if not handle then return end
+        handle:Write(table.concat(values, "\n"))
+        handle:Close()
+        ok = true
+    end)
+    return ok
 end
 
 local function sessionKey()
@@ -8909,6 +8832,7 @@ local callbackEvents, drawCallbacks = 0, 0
 local nextListenerRefresh, nextSessionPoll = 0, 0
 local lastSessionKey
 local refreshVoteBridge, bridgeRefreshPending
+local RUNTIME_FILE = "rgnvotes_runtime.txt"
 local runtimeHistory = {}
 local localChatPrint, localChatStatus
 local localPrintCount = 0
@@ -8945,7 +8869,25 @@ local function writeRuntime(reason, values)
         end
         runtimeHistory[#runtimeHistory + 1] = clean(reason) .. "|" .. table.concat(details, ",")
         if #runtimeHistory > 20 then table.remove(runtimeHistory, 1) end
-        M._voteRuntimeHistory = runtimeHistory
+        local handle = file.Open(RUNTIME_FILE, "w")
+        if not handle then return end
+        local lines = {
+            "reason=" .. clean(reason),
+            "enabled=1",
+            "armed=1",
+            "events=" .. tostring(eventCount),
+            "callback_events=" .. tostring(callbackEvents),
+            "draw_callbacks=" .. tostring(drawCallbacks),
+            "visible=" .. tostring(#order),
+            "queued=" .. tostring(#chatQueue),
+            "local_chat=" .. clean(localChatStatus or "not initialized"),
+        }
+        if type(values) == "table" then
+            for key, value in pairs(values) do lines[#lines + 1] = clean(key) .. "=" .. clean(value) end
+        end
+        for i = 1, #runtimeHistory do lines[#lines + 1] = "history_" .. i .. "=" .. runtimeHistory[i] end
+        handle:Write(table.concat(lines, "\n"))
+        handle:Close()
     end)
 end
 

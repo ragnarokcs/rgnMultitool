@@ -1,21 +1,5 @@
 # Changelog
 
-## 1.2.0 - 2026-07-16
-
-### Unified storage
-
-- Consolidated updater source, module settings and weapon profiles into one length-prefixed `rgnMultitool_data.txt` container.
-- Added automatic migration from every v1.1 configuration, profile, diagnostic and updater-cache file.
-- Added a validated one-time upgrade path for the original public `loader.lua`.
-- Removed separate runtime diagnostic logs and the redundant weapon-engine cache.
-- Debounced configuration writes so rapid slider/control changes produce one physical save.
-
-### Reliability
-
-- Preserved the exact embedded weapon engine used by the previously validated cache.
-- Added fresh-session serialization coverage, offline startup checks and corrupt-update rollback tests.
-- Fixed a loader serialization defect discovered during live migration testing.
-
 ## 1.1.0 - 2026-07-16
 
 ### Added
