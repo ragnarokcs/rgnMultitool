@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.3 - 2026-07-18
+
+### Session-transition crash hotfix
+
+- Fixed the native access violation reproduced when entering or leaving a match while Killsay attempted to re-register `FireGameEvent` from the main Draw callback.
+- Registered the Killsay and vote-revealer event bridges exactly once at module load; map and server transitions now only renew listeners and reset Lua state.
+- Preserved the always-on vote revealer, opt-in Killsay, cosmetics and the proven per-file configuration/cache layout from 1.1.0.
+
 ## 1.1.2 - 2026-07-17
 
 ### Vote revealer restoration
