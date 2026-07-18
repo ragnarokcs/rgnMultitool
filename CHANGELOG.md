@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.8 - 2026-07-18
+
+### Real names in vote output
+
+- Resolved current CS2 vote controller slots through `m_hPlayerPawn` before asking Aimware for a player name.
+- Reused the proven pawn-name path from Killsay so vote initiators, voters and kick targets show their actual scoreboard names instead of `player #N`.
+- Kept controller string fields disabled, numeric fallbacks for disconnected players and the working left-hand knife behavior from 1.1.7.
+
 ## 1.1.7 - 2026-07-18
 
 ### Left-hand knife dispatch fix

@@ -1,6 +1,6 @@
--- rgnMultitool v1.1.7: left-hand knife routed through the main command hook.
+-- rgnMultitool v1.1.8: vote controllers resolve through their player pawns.
 -- Keeps the proven per-file configuration/cache layout from v1.1.0.
-local RGN_MULTITOOL_VERSION = "1.1.7"
+local RGN_MULTITOOL_VERSION = "1.1.8"
 local RGN_MULTITOOL_SIGNATURE = "RGN_MULTITOOL_SOURCE_V1"
 _G.RGN_MULTITOOL_VERSION = RGN_MULTITOOL_VERSION
 pcall(function()
@@ -9128,14 +9128,59 @@ local function playerNameByUserID(userID)
     return name
 end
 
+local function pawnForController(controller)
+    if not controller then return nil, nil end
+
+    -- Current vote events provide a CCSPlayerController slot, while Aimware's
+    -- stable name path operates on the associated player pawn.
+    local pawn
+    pcall(function() pawn = controller:GetFieldEntity("m_hPlayerPawn") end)
+    if not pawn then pcall(function() pawn = controller:GetFieldEntity("m_hPawn") end) end
+    local pawnIndex = entityIndex(pawn)
+    if pawn and pawnIndex then return pawn, pawnIndex end
+
+    -- Compatibility path for builds that expose the CHandle only as an int.
+    local handle
+    pcall(function() handle = tonumber(controller:GetFieldInt("m_hPlayerPawn")) end)
+    if not handle then pcall(function() handle = tonumber(controller:GetFieldInt("m_hPawn")) end) end
+    if handle and handle ~= 0 and handle ~= -1 then
+        pawnIndex = handle % 32768
+        if pawnIndex > 0 and pawnIndex ~= 32767 then
+            pcall(function() pawn = entities.GetByIndex(pawnIndex) end)
+            if pawn then return pawn, pawnIndex end
+        end
+    end
+    return nil, nil
+end
+
+local function entityPlayerName(entity)
+    if not entity then return "" end
+    local name = ""
+    pcall(function() name = entity:GetName() end)
+    name = clean(name)
+    if name == "CCSPlayerController" or name == "CCSPlayerPawn"
+        or name == "C_CSPlayerPawn" or name == "C_CSPlayerPawnBase" then
+        return ""
+    end
+    return name
+end
+
 local function voterInfo(raw, eventTeam)
     raw = tonumber(raw) or 0
     local entity, index = controllerFor(raw)
+    local pawn, pawnIndex = pawnForController(entity)
     -- Networked controller string fields currently return invalid bytes on
-    -- some CS2 builds. Prefer Aimware's public player-name APIs and the event
-    -- cache; never display those raw fields in chat or the overlay.
-    local name = clean(playerNames[raw] or (index and playerNames[index]) or "")
+    -- some CS2 builds. Use the same pawn-name route that Killsay uses and never
+    -- display raw controller strings in chat or the overlay.
+    local name = clean(playerNames[raw] or (index and playerNames[index])
+        or (pawnIndex and playerNames[pawnIndex]) or "")
     name = clean(name)
+    if name == "" and pawn then
+        name = entityPlayerName(pawn)
+    end
+    if name == "" and pawnIndex then
+        name = playerNameByIndex(pawnIndex)
+    end
     if name == "" and index then
         name = playerNameByIndex(index)
     end
@@ -9151,6 +9196,7 @@ local function voterInfo(raw, eventTeam)
         -- a few frames later while the same vote is still in progress.
         playerNames[raw] = name
         if index then playerNames[index] = name end
+        if pawnIndex then playerNames[pawnIndex] = name end
     end
 
     -- The vote event's team is authoritative. Entity lookup is only a
@@ -9166,6 +9212,7 @@ local function voterInfo(raw, eventTeam)
     if team == 2 or team == 3 then
         playerTeams[raw] = team
         if index then playerTeams[index] = team end
+        if pawnIndex then playerTeams[pawnIndex] = team end
     end
     local teamName = team == 2 and "T" or (team == 3 and "CT" or "SPEC")
     return name, teamName, team
