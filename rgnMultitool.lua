@@ -1,6 +1,6 @@
--- rgnMultitool v1.1.6: reliable vote initiator and target names.
+-- rgnMultitool v1.1.7: left-hand knife routed through the main command hook.
 -- Keeps the proven per-file configuration/cache layout from v1.1.0.
-local RGN_MULTITOOL_VERSION = "1.1.6"
+local RGN_MULTITOOL_VERSION = "1.1.7"
 local RGN_MULTITOOL_SIGNATURE = "RGN_MULTITOOL_SOURCE_V1"
 _G.RGN_MULTITOOL_VERSION = RGN_MULTITOOL_VERSION
 pcall(function()
@@ -2151,6 +2151,19 @@ function M:Build(opts)
 
     pcall(function()
         callbacks.Register("CreateMove", "rgnMultitool_UIInput", function(cmd)
+        if cmd and type(M._viewmodelCommandCallback) == "function" then
+            local ok, err = pcall(M._viewmodelCommandCallback, cmd)
+            M._viewmodelCommandAliveAt = now()
+            if ok then
+                M._viewmodelCommandError = nil
+            else
+                local message = tostring(err)
+                if M._viewmodelCommandError ~= message then
+                    M._viewmodelCommandError = message
+                    print("[rgnMultitool] viewmodel command hook error: " .. message)
+                end
+            end
+        end
         if cmd and type(M._movementCommandCallback) == "function" then
             local ok, err = pcall(M._movementCommandCallback, cmd)
             M._movementCommandAliveAt = now()
@@ -2998,6 +3011,7 @@ local status = "ready"
 local lastApply, lastSignature, lastSave = -100, "", -100
 local lastEnabled, lastExtended = false, false
 local knifeLeftOwned, knifeHandWasAlive = false, false
+local knifeHandStatus = "disabled"
 
 -- Femboytap's additive XYZ hook is useful, but upstream disabled automatic
 -- installation after an execute-AV regression. This version is opt-in and
@@ -3365,14 +3379,21 @@ actions:Button("Restore original", function()
     local ok = restore(); saveConfig()
     M:Notify(status, ok and "success" or "error")
 end)
-actions:Button("Show current values", function() M:Notify(status, "info") end)
+actions:Button("Show current values", function()
+    M:Notify(status .. " | knife hand: " .. knifeHandStatus, "info")
+end)
 
 local function commandHand(left)
     local ok = pcall(function()
         if not client or type(client.Command) ~= "function" then error("client.Command unavailable") end
         client.Command(left and "switchhandsleft" or "switchhandsright", true)
     end)
-    if ok then knifeLeftOwned = left == true end
+    if ok then
+        knifeLeftOwned = left == true
+        knifeHandStatus = left and "left" or "right"
+    else
+        knifeHandStatus = "command unavailable"
+    end
     return ok
 end
 
@@ -3380,6 +3401,7 @@ local function knifeHandTick()
     if not knifeLeft:Get() then
         if knifeLeftOwned then commandHand(false) end
         knifeHandWasAlive = false
+        knifeHandStatus = "disabled"
         return
     end
 
@@ -3387,6 +3409,7 @@ local function knifeHandTick()
     pcall(function() player = entities.GetLocalPlayer() end)
     if not player then
         knifeHandWasAlive = false
+        knifeHandStatus = "waiting for player"
         return
     end
 
@@ -3394,6 +3417,7 @@ local function knifeHandTick()
     pcall(function() alive = player:IsAlive() == true end)
     if not alive then
         knifeHandWasAlive = false
+        knifeHandStatus = "waiting for spawn"
         return
     end
 
@@ -3401,6 +3425,7 @@ local function knifeHandTick()
     pcall(function() weaponType = tonumber(player:GetWeaponType()) end)
     if weaponType == nil then
         knifeHandWasAlive = false
+        knifeHandStatus = "weapon type unavailable"
         return
     end
 
@@ -3409,19 +3434,21 @@ local function knifeHandTick()
         knifeHandWasAlive = commandHand(wantsLeft)
     else
         knifeHandWasAlive = true
+        knifeHandStatus = wantsLeft and "left" or "right"
     end
 end
 
--- Keep this event bridge stable for the lifetime of the module. Commands are
--- emitted only on spawn/weapon-hand transitions, never on every game tick.
-pcall(function() callbacks.Unregister("CreateMove", "rgnMultitool_ViewmodelKnifeHand") end)
-callbacks.Register("CreateMove", "rgnMultitool_ViewmodelKnifeHand", function()
+-- Aimware may discard additional CreateMove callbacks. Route this through the
+-- Multitool's proven main command hook, shared with Movement, and emit a hand
+-- command only on spawn or weapon transitions.
+M._viewmodelCommandCallback = function()
     local ok, err = pcall(knifeHandTick)
     if not ok then
         knifeHandWasAlive = false
+        knifeHandStatus = "error"
         print("[rgnMultitool] knife-hand error: " .. tostring(err))
     end
-end)
+end
 
 lastEnabled, lastExtended = enabled:Get(), extended:Get()
 M:OnFrame(function()
@@ -3447,7 +3474,7 @@ pcall(function()
     callbacks.Register("Unload", "rgnMultitool_ViewmodelUnload", function()
         pcall(saveConfig)
         if knifeLeftOwned then pcall(commandHand, false) end
-        pcall(callbacks.Unregister, "CreateMove", "rgnMultitool_ViewmodelKnifeHand")
+        M._viewmodelCommandCallback = nil
         if enabled:Get() then pcall(restore) end
         pcall(EXT.uninstall)
         pcall(callbacks.Unregister, "Unload", "rgnMultitool_ViewmodelUnload")
