@@ -29,8 +29,8 @@ Source-visible Aimware Lua toolkit for CS2. Every module lives in one compact me
 
 ### Vote information
 
-- Always-on vote revealer with local team-colored chat messages and the voter overlay.
-- Version 1.1.3 registers the Killsay and vote event bridges only once; session transitions renew listeners and state without mutating Aimware's native callback registry.
+- Always-on vote revealer with fully English, team-colored local chat messages and the voter overlay.
+- Version 1.1.4 retains the one-time Killsay and vote event bridges; session transitions renew listeners and state without mutating Aimware's native callback registry.
 - The release keeps the proven per-file configuration and cache layout from 1.1.0; it does not use the reverted unified-storage experiment.
 
 ### Reliability
