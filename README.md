@@ -16,6 +16,7 @@ Source-visible Aimware Lua toolkit for CS2. Every module lives in one compact me
 ### Viewmodel and movement
 
 - Safe extended X, Y and Z viewmodel positioning with presets.
+- Optional automatic left-hand knife with right-hand restoration for other weapons.
 - Velocity display and configurable jump trail.
 - Prediction edge-bug helper with hold/toggle activation.
 - W/A/S/D null-bind resolver.

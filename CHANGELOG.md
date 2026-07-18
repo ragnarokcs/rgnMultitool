@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.5 - 2026-07-18
+
+### Automatic left-hand knife
+
+- Added an opt-in **Knife in left hand** control to the Viewmodel module.
+- Switches left only while a knife is active and restores the right hand for every other weapon, when disabled and on Lua unload.
+- Saves the setting while remaining disabled by default; commands run only on relevant spawn or weapon transitions.
+
 ## 1.1.4 - 2026-07-18
 
 ### English vote-revealer output
