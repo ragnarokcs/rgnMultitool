@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.7 - 2026-07-18
+
+### Left-hand knife dispatch fix
+
+- Routed the automatic knife-hand logic through the Multitool's proven main `CreateMove` dispatcher instead of registering a callback that Aimware could silently ignore.
+- Added a knife-hand runtime state to **Show current values** for quick live verification.
+- Preserved transition-only hand commands, saved opt-in state and right-hand restoration on disable/unload.
+
 ## 1.1.6 - 2026-07-18
 
 ### Vote initiator and target names
