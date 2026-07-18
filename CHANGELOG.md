@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.6 - 2026-07-18
+
+### Vote initiator and target names
+
+- Fixed corrupted or missing player names in vote chat and the voter overlay by prioritizing Aimware's public name APIs over unstable controller string fields.
+- Kick votes now identify both the player who started the vote and its target, including servers that omit `vote_started` and begin with the target's automatic F2 vote.
+- Added safe target-ID resolution and a deterministic player-slot fallback without changing vote detection or event registration.
+
 ## 1.1.5 - 2026-07-18
 
 ### Automatic left-hand knife

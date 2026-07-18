@@ -1,6 +1,6 @@
--- rgnMultitool v1.1.5: optional automatic left-hand knife.
+-- rgnMultitool v1.1.6: reliable vote initiator and target names.
 -- Keeps the proven per-file configuration/cache layout from v1.1.0.
-local RGN_MULTITOOL_VERSION = "1.1.5"
+local RGN_MULTITOOL_VERSION = "1.1.6"
 local RGN_MULTITOOL_SIGNATURE = "RGN_MULTITOOL_SOURCE_V1"
 _G.RGN_MULTITOOL_VERSION = RGN_MULTITOOL_VERSION
 pcall(function()
@@ -9073,41 +9073,58 @@ local function controllerFor(raw)
     return nil, index
 end
 
-local function controllerFieldString(entity, field)
-    local value
-    if not entity then return "" end
-    pcall(function() value = entity:GetFieldString(field) end)
-    return clean(value)
+local function playerNameByIndex(index)
+    index = tonumber(index)
+    if not index or index <= 0 then return "" end
+    local name = ""
+    pcall(function()
+        if client and type(client.GetPlayerNameByIndex) == "function" then
+            name = client.GetPlayerNameByIndex(index)
+        end
+    end)
+    name = clean(name)
+    if name == "CCSPlayerController" then return "" end
+    return name
+end
+
+local function playerNameByUserID(userID)
+    userID = tonumber(userID)
+    if not userID or userID <= 0 then return "" end
+    local name = ""
+    pcall(function()
+        if client and type(client.GetPlayerNameByUserID) == "function" then
+            name = client.GetPlayerNameByUserID(userID)
+        end
+    end)
+    name = clean(name)
+    if name == "CCSPlayerController" then return "" end
+    return name
 end
 
 local function voterInfo(raw, eventTeam)
     raw = tonumber(raw) or 0
     local entity, index = controllerFor(raw)
-    local name = controllerFieldString(entity, "m_sSanitizedPlayerName")
-    if name == "" then name = controllerFieldString(entity, "m_iszPlayerName") end
-    if name == "CCSPlayerController" then name = "" end
-
-    if not name or name == "" then
-        name = playerNames[raw]
-    end
+    -- Networked controller string fields currently return invalid bytes on
+    -- some CS2 builds. Prefer Aimware's public player-name APIs and the event
+    -- cache; never display those raw fields in chat or the overlay.
+    local name = clean(playerNames[raw] or (index and playerNames[index]) or "")
     name = clean(name)
     if name == "" and index then
-        pcall(function()
-            if client and type(client.GetPlayerNameByIndex) == "function" then
-                name = client.GetPlayerNameByIndex(index)
-            end
-        end)
-        name = clean(name)
+        name = playerNameByIndex(index)
+    end
+    -- Only interpret raw as a legacy UserID when no controller entity matched;
+    -- otherwise the same small number can name a completely different player.
+    if name == "" and not entity then
+        name = playerNameByUserID(raw)
     end
     if name == "" then
-        pcall(function()
-            if client and type(client.GetPlayerNameByUserID) == "function" then
-                name = client.GetPlayerNameByUserID(raw)
-            end
-        end)
-        name = clean(name)
+        name = "player #" .. tostring(raw)
+    else
+        -- Do not cache the numeric fallback: a player API can become available
+        -- a few frames later while the same vote is still in progress.
+        playerNames[raw] = name
+        if index then playerNames[index] = name end
     end
-    if name == "" or name == "CCSPlayerController" then name = "player" end
 
     -- The vote event's team is authoritative. Entity lookup is only a
     -- fallback when the server omitted it; it must never override a valid 2/3.
@@ -9125,6 +9142,20 @@ local function voterInfo(raw, eventTeam)
     end
     local teamName = team == 2 and "T" or (team == 3 and "CT" or "SPEC")
     return name, teamName, team
+end
+
+local function voteTargetName(event)
+    local text = eventString(event, "param1")
+    if text == "" then text = eventString(event, "details_str") end
+
+    local targetID = eventInt(event, "target")
+    if not targetID or targetID <= 0 then targetID = eventInt(event, "targetid") end
+    if not targetID or targetID <= 0 then targetID = tonumber(text) end
+    if targetID and targetID > 0 then
+        local resolved = voterInfo(targetID)
+        if resolved and not resolved:match("^player #%d+$") then return resolved end
+    end
+    return text
 end
 
 local function queueChat(teamName, message)
@@ -9177,8 +9208,10 @@ M._voteEventCallback = function(event)
     end
     if name == "player_connect" or name == "player_info" then
         local user = eventInt(event, "userid")
+        local entityID = eventInt(event, "entityid")
         local playerName = eventString(event, "name")
         if user and playerName ~= "" then playerNames[user] = playerName end
+        if entityID and playerName ~= "" then playerNames[entityID] = playerName end
         return
     end
     if name == "player_team" or name == "player_disconnect" then
@@ -9211,8 +9244,7 @@ M._voteEventCallback = function(event)
         local issue = eventString(event, "issue")
         local label = voteLabel(issue)
         currentVoteTeam, currentVoteLabel = team, label
-        local target = eventString(event, "param1")
-        if target == "" then target = eventString(event, "details_str") end
+        local target = voteTargetName(event)
         status = initiatorName .. " started " .. label
         queueChat(teamName, string.format("%s started vote: %s%s", initiatorName, label,
             target ~= "" and (" | target: " .. target) or ""))
@@ -9260,7 +9292,7 @@ M._voteEventCallback = function(event)
         -- CS2 often sends the kick target's automatic F2 before the caller's
         -- F1 and omits vote_started. Preserve it until the initiator arrives.
         firstNoName = firstNoName ~= "" and firstNoName or voter
-        preStartVotes[#preStartVotes + 1] = { team = teamName, name = voter, choice = choice }
+        preStartVotes[#preStartVotes + 1] = { raw = raw, team = teamName, name = voter, choice = choice }
         upsertVote(raw, voter, teamName, option)
         lastVote, endAt = clock(), 0
         eventCount = eventCount + 1
@@ -9272,6 +9304,15 @@ M._voteEventCallback = function(event)
     end
     if not voteOpen then
         voteOpen = true
+        -- Resolve the buffered automatic F2 again now that the player list has
+        -- had another event frame to settle. This player is the kick target.
+        if #preStartVotes > 0 and preStartVotes[1].raw then
+            local refreshedTarget = voterInfo(preStartVotes[1].raw)
+            if refreshedTarget and not refreshedTarget:match("^player #%d+$") then
+                preStartVotes[1].name = refreshedTarget
+                firstNoName = refreshedTarget
+            end
+        end
         local label
         if firstNoName ~= "" then
             label = "KICK PLAYER"
