@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.4 - 2026-07-18
+
+### English vote-revealer output
+
+- Translated every visible vote type, start, choice, result and fallback message to English.
+- Preserved team-colored local chat output, voter overlay, event handling and the session-transition crash fix from 1.1.3.
+- Kept Spanish text exclusively in the opt-in Argentina Killsay pack.
+
 ## 1.1.3 - 2026-07-18
 
 ### Session-transition crash hotfix

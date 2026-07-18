@@ -1,6 +1,6 @@
--- rgnMultitool v1.1.3: session-safe one-time game-event bridges.
+-- rgnMultitool v1.1.4: fully English vote-revealer output.
 -- Keeps the proven per-file configuration/cache layout from v1.1.0.
-local RGN_MULTITOOL_VERSION = "1.1.3"
+local RGN_MULTITOOL_VERSION = "1.1.4"
 local RGN_MULTITOOL_SIGNATURE = "RGN_MULTITOOL_SOURCE_V1"
 _G.RGN_MULTITOOL_VERSION = RGN_MULTITOOL_VERSION
 pcall(function()
@@ -9088,15 +9088,15 @@ end
 
 local function voteLabel(issue)
     local lower = clean(issue):lower()
-    if lower:find("timeout", 1, true) or lower:find("pause", 1, true) then return "TIEMPO MUERTO" end
-    if lower:find("kick", 1, true) then return "EXPULSAR" end
-    if lower:find("surrender", 1, true) then return "RENDIRSE" end
-    if lower:find("restart", 1, true) then return "REINICIAR" end
-    if lower:find("rematch", 1, true) then return "REVANCHA" end
-    if lower:find("changelevel", 1, true) or lower:find("changemap", 1, true) then return "CAMBIAR MAPA" end
-    if lower:find("swap", 1, true) then return "CAMBIAR BANDOS" end
+    if lower:find("timeout", 1, true) or lower:find("pause", 1, true) then return "TIMEOUT" end
+    if lower:find("kick", 1, true) then return "KICK PLAYER" end
+    if lower:find("surrender", 1, true) then return "SURRENDER" end
+    if lower:find("restart", 1, true) then return "RESTART MATCH" end
+    if lower:find("rematch", 1, true) then return "REMATCH" end
+    if lower:find("changelevel", 1, true) or lower:find("changemap", 1, true) then return "CHANGE MAP" end
+    if lower:find("swap", 1, true) then return "SWAP TEAMS" end
     if lower ~= "" then return lower:gsub("#", ""):gsub("_", " "):upper() end
-    return "TIPO OCULTO"
+    return "UNKNOWN VOTE"
 end
 
 M._voteEventCallback = function(event)
@@ -9152,9 +9152,9 @@ M._voteEventCallback = function(event)
         currentVoteTeam, currentVoteLabel = team, label
         local target = eventString(event, "param1")
         if target == "" then target = eventString(event, "details_str") end
-        status = initiatorName .. " inicio " .. label
-        queueChat(teamName, string.format("%s inicio votacion: %s%s", initiatorName, label,
-            target ~= "" and (" para " .. target) or ""))
+        status = initiatorName .. " started " .. label
+        queueChat(teamName, string.format("%s started vote: %s%s", initiatorName, label,
+            target ~= "" and (" | target: " .. target) or ""))
         eventCount = eventCount + 1
         writeRuntime("vote started", {
             initiator = initiator, name = initiatorName, team = teamName,
@@ -9178,9 +9178,9 @@ M._voteEventCallback = function(event)
     if name == "vote_ended" or name == "vote_failed" or name == "vote_passed" then
         endAt = clock() + DISPLAY_DURATION
         status = name:gsub("_", " ")
-        local result = name == "vote_passed" and "APROBADA" or (name == "vote_failed" and "RECHAZADA" or "FINALIZADA")
+        local result = name == "vote_passed" and "PASSED" or (name == "vote_failed" and "FAILED" or "ENDED")
         local resultTeam = currentVoteTeam == 2 and "T" or (currentVoteTeam == 3 and "CT" or nil)
-        queueChat(resultTeam, "Votacion " .. result .. (currentVoteLabel ~= "" and (": " .. currentVoteLabel) or ""))
+        queueChat(resultTeam, "Vote " .. result .. (currentVoteLabel ~= "" and (": " .. currentVoteLabel) or ""))
         writeRuntime("vote result", { event = name, result = result })
         return
     end
@@ -9194,7 +9194,7 @@ M._voteEventCallback = function(event)
     if option == nil then return end
 
     local voter, teamName, team = voterInfo(raw, eventInt(event, "team"))
-    local choice = option == 0 and "SI (F1)" or (option == 1 and "NO (F2)" or ("OPCION " .. tostring(option + 1)))
+    local choice = option == 0 and "YES (F1)" or (option == 1 and "NO (F2)" or ("OPTION " .. tostring(option + 1)))
     if not voteOpen and option == 1 then
         -- CS2 often sends the kick target's automatic F2 before the caller's
         -- F1 and omits vote_started. Preserve it until the initiator arrives.
@@ -9213,26 +9213,26 @@ M._voteEventCallback = function(event)
         voteOpen = true
         local label
         if firstNoName ~= "" then
-            label = "EXPULSAR"
+            label = "KICK PLAYER"
         else
             local elapsed = clock() - (tonumber(recentDisconnect.at) or -1000)
             local sameTeam = recentDisconnect.team == nil or team == nil or recentDisconnect.team == team
-            label = elapsed >= 0 and elapsed <= 45 and sameTeam and "RENDIRSE" or "VOTO DE EQUIPO (TIPO OCULTO)"
+            label = elapsed >= 0 and elapsed <= 45 and sameTeam and "SURRENDER" or "TEAM VOTE (UNKNOWN TYPE)"
         end
         currentVoteTeam, currentVoteLabel = team, label
-        queueChat(teamName, string.format("%s inicio votacion: %s%s", voter, label,
-            firstNoName ~= "" and (" para " .. firstNoName) or ""))
+        queueChat(teamName, string.format("%s started vote: %s%s", voter, label,
+            firstNoName ~= "" and (" | target: " .. firstNoName) or ""))
         for i = 1, #preStartVotes do
             local early = preStartVotes[i]
-            queueChat(early.team, string.format("%s voto %s", early.name, early.choice))
+            queueChat(early.team, string.format("%s voted %s", early.name, early.choice))
         end
         preStartVotes = {}
     end
     upsertVote(raw, voter, teamName, option)
     lastVote, endAt = clock(), 0
     eventCount = eventCount + 1
-    status = voter .. " voto " .. choice
-    queueChat(teamName, string.format("%s voto %s%s", voter, choice,
+    status = voter .. " voted " .. choice
+    queueChat(teamName, string.format("%s voted %s%s", voter, choice,
         currentVoteLabel ~= "" and (" | " .. currentVoteLabel) or ""))
     writeRuntime("vote cast", { raw = raw, name = voter, team = teamName, option = option, choice = choice })
     if PLAY_SOUND then pcall(function() client.Command("play buttons\\button14.wav", true) end) end
