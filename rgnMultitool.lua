@@ -1,6 +1,6 @@
--- rgnMultitool v1.1.4: fully English vote-revealer output.
+-- rgnMultitool v1.1.5: optional automatic left-hand knife.
 -- Keeps the proven per-file configuration/cache layout from v1.1.0.
-local RGN_MULTITOOL_VERSION = "1.1.4"
+local RGN_MULTITOOL_VERSION = "1.1.5"
 local RGN_MULTITOOL_SIGNATURE = "RGN_MULTITOOL_SOURCE_V1"
 _G.RGN_MULTITOOL_VERSION = RGN_MULTITOOL_VERSION
 pcall(function()
@@ -2992,11 +2992,12 @@ local M = M
 
 local ffi = rawget(_G, "ffi")
 local CONFIG_FILE = "rgnmultitool_viewmodel.txt"
-local DEFAULT = { enabled = false, x = 1.0, y = 1.0, z = -1.0 }
+local DEFAULT = { enabled = false, knifeLeft = false, x = 1.0, y = 1.0, z = -1.0 }
 local original = { x = DEFAULT.x, y = DEFAULT.y, z = DEFAULT.z, preset = 1 }
 local status = "ready"
 local lastApply, lastSignature, lastSave = -100, "", -100
 local lastEnabled, lastExtended = false, false
+local knifeLeftOwned, knifeHandWasAlive = false, false
 
 -- Femboytap's additive XYZ hook is useful, but upstream disabled automatic
 -- installation after an execute-AV regression. This version is opt-in and
@@ -3259,6 +3260,7 @@ tab:Row()
 local control = tab:Section("Viewmodel override")
 local enabled = control:Checkbox("Enable viewmodel override", config.enabled == "1")
 local extended = control:Checkbox("Extended XYZ (validated hook)", false)
+local knifeLeft = control:Checkbox("Knife in left hand", config.knife_left == "1")
 local offsetX = control:Slider("Horizontal position (X)", clamp(config.x or DEFAULT.x, -30, 30), -30, 30, 0.1, "%.1f")
 local offsetY = control:Slider("Depth position (Y)", clamp(config.y or DEFAULT.y, -30, 30), -30, 30, 0.1, "%.1f")
 local offsetZ = control:Slider("Vertical position (Z)", clamp(config.z or DEFAULT.z, -30, 30), -30, 30, 0.1, "%.1f")
@@ -3276,7 +3278,7 @@ end
 local function signature()
     local x, y, z = values()
     return table.concat({
-        enabled:Get() and "1" or "0", extended:Get() and "1" or "0",
+        enabled:Get() and "1" or "0", extended:Get() and "1" or "0", knifeLeft:Get() and "1" or "0",
         x, y, z,
     }, ":")
 end
@@ -3285,6 +3287,7 @@ local function saveConfig()
     local x, y, z = values()
     local data = table.concat({
         "enabled=" .. (enabled:Get() and "1" or "0"),
+        "knife_left=" .. (knifeLeft:Get() and "1" or "0"),
         "x=" .. tostring(x), "y=" .. tostring(y), "z=" .. tostring(z),
     }, "\n")
     local ok = false
@@ -3364,6 +3367,62 @@ actions:Button("Restore original", function()
 end)
 actions:Button("Show current values", function() M:Notify(status, "info") end)
 
+local function commandHand(left)
+    local ok = pcall(function()
+        if not client or type(client.Command) ~= "function" then error("client.Command unavailable") end
+        client.Command(left and "switchhandsleft" or "switchhandsright", true)
+    end)
+    if ok then knifeLeftOwned = left == true end
+    return ok
+end
+
+local function knifeHandTick()
+    if not knifeLeft:Get() then
+        if knifeLeftOwned then commandHand(false) end
+        knifeHandWasAlive = false
+        return
+    end
+
+    local player
+    pcall(function() player = entities.GetLocalPlayer() end)
+    if not player then
+        knifeHandWasAlive = false
+        return
+    end
+
+    local alive = false
+    pcall(function() alive = player:IsAlive() == true end)
+    if not alive then
+        knifeHandWasAlive = false
+        return
+    end
+
+    local weaponType
+    pcall(function() weaponType = tonumber(player:GetWeaponType()) end)
+    if weaponType == nil then
+        knifeHandWasAlive = false
+        return
+    end
+
+    local wantsLeft = weaponType == 0
+    if not knifeHandWasAlive or wantsLeft ~= knifeLeftOwned then
+        knifeHandWasAlive = commandHand(wantsLeft)
+    else
+        knifeHandWasAlive = true
+    end
+end
+
+-- Keep this event bridge stable for the lifetime of the module. Commands are
+-- emitted only on spawn/weapon-hand transitions, never on every game tick.
+pcall(function() callbacks.Unregister("CreateMove", "rgnMultitool_ViewmodelKnifeHand") end)
+callbacks.Register("CreateMove", "rgnMultitool_ViewmodelKnifeHand", function()
+    local ok, err = pcall(knifeHandTick)
+    if not ok then
+        knifeHandWasAlive = false
+        print("[rgnMultitool] knife-hand error: " .. tostring(err))
+    end
+end)
+
 lastEnabled, lastExtended = enabled:Get(), extended:Get()
 M:OnFrame(function()
     local now = clock()
@@ -3387,13 +3446,15 @@ end)
 pcall(function()
     callbacks.Register("Unload", "rgnMultitool_ViewmodelUnload", function()
         pcall(saveConfig)
+        if knifeLeftOwned then pcall(commandHand, false) end
+        pcall(callbacks.Unregister, "CreateMove", "rgnMultitool_ViewmodelKnifeHand")
         if enabled:Get() then pcall(restore) end
         pcall(EXT.uninstall)
         pcall(callbacks.Unregister, "Unload", "rgnMultitool_ViewmodelUnload")
     end)
 end)
 
-print("[rgnMultitool] viewmodel loaded: XYZ-only | opt-in extended hook")
+print("[rgnMultitool] viewmodel loaded: XYZ + optional left-hand knife | opt-in extended hook")
 end)
 
 loadModule("WEAPONS", function()
