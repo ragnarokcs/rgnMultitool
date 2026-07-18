@@ -1,6 +1,6 @@
--- rgnMultitool v1.1.2: restored vote revealer with a re-entry-safe runtime.
+-- rgnMultitool v1.1.3: session-safe one-time game-event bridges.
 -- Keeps the proven per-file configuration/cache layout from v1.1.0.
-local RGN_MULTITOOL_VERSION = "1.1.2"
+local RGN_MULTITOOL_VERSION = "1.1.3"
 local RGN_MULTITOOL_SIGNATURE = "RGN_MULTITOOL_SOURCE_V1"
 _G.RGN_MULTITOOL_VERSION = RGN_MULTITOOL_VERSION
 pcall(function()
@@ -7664,8 +7664,7 @@ local RUNTIME_FILE = "rgnkillsay_runtime.txt"
 local callbackEvents = 0
 local runtimeHistory = {}
 local armed = false
-local refreshEventBridge
-local bridgeRefreshPending = false
+local registerEventBridge
 local nextSessionPoll, nextListenerRefresh = 0, 0
 local lastSessionKey, sessionEpoch = nil, 0
 
@@ -8063,12 +8062,7 @@ M._killsayDrawCallback = function()
             lastSessionKey = key
             requestKillsayListeners()
             resetKillsaySession("session changed: " .. previous .. " -> " .. key)
-            bridgeRefreshPending = true
         end
-    end
-    if bridgeRefreshPending and type(refreshEventBridge) == "function" then
-        bridgeRefreshPending = false
-        refreshEventBridge("session transition")
     end
 
     local requested = enabled:Get() == true
@@ -8158,7 +8152,6 @@ M._killsayEventCallback = function(event)
     if eventName == "server_spawn" or eventName == "game_newmap" or eventName == "cs_game_disconnected" then
         requestKillsayListeners()
         resetKillsaySession(eventName)
-        bridgeRefreshPending = true
         return
     end
     if eventName ~= "player_death" then return end
@@ -8361,7 +8354,7 @@ end)
 requestKillsayListeners()
 lastSessionKey = currentSessionKey()
 
-refreshEventBridge = function(reason)
+registerEventBridge = function()
     local generation = (tonumber(rawget(_G, "RGN_KILLSAY_GENERATION")) or 0) + 1
     rawset(_G, "RGN_KILLSAY_GENERATION", generation)
     local registered = pcall(function()
@@ -8377,12 +8370,15 @@ refreshEventBridge = function(reason)
     end)
     writeRuntime(registered and "callback registered" or "callback registration failed", {
         generation = generation,
-        reason = reason or "manual",
+        reason = "module load",
     })
     return registered
 end
 
-refreshEventBridge("module load")
+-- Register once while the module is loading. Aimware's native callback registry
+-- is not safe to mutate from Draw/CreateMove during a map or server transition.
+-- Session changes only renew AllowListener subscriptions and reset Lua state.
+registerEventBridge()
 
 print("[rgnKillsay] loaded | opt-in | clean packs + Argentina + custom")
 end)
@@ -8834,7 +8830,7 @@ local eventCount, status = 0, "ready"
 local callbackEvents, drawCallbacks = 0, 0
 local nextListenerRefresh, nextSessionPoll, nextLogicTick = 0, 0, 0
 local lastSessionKey
-local refreshVoteBridge, bridgeRefreshPending
+local registerVoteBridge
 local RUNTIME_FILE = "rgnvotes_runtime.txt"
 local runtimeHistory = {}
 local localChatPrint, localChatStatus
@@ -9115,7 +9111,6 @@ M._voteEventCallback = function(event)
         clearVote("session rearmed", true)
         playerNames, playerTeams = {}, {}
         recentDisconnect = { at = -1000, team = nil, name = "" }
-        bridgeRefreshPending = true
         writeRuntime("session event", { event = name, callbacks = callbackEvents, preserved = #chatQueue })
         return
     end
@@ -9334,12 +9329,7 @@ local function voteLogicTick()
             lastSessionKey = key
             requestListeners()
             clearVote("session rearmed", true)
-            bridgeRefreshPending = true
         end
-    end
-    if bridgeRefreshPending and type(refreshVoteBridge) == "function" then
-        bridgeRefreshPending = false
-        refreshVoteBridge("session transition")
     end
     sendQueued(t)
     if lastVote > 0 and endAt == 0 and t - lastVote > 2.0 then endAt = t + DISPLAY_DURATION end
@@ -9376,7 +9366,7 @@ lastSessionKey = sessionKey()
 initLocalChat()
 writeRuntime("module loaded", { session = lastSessionKey, chat = localChatStatus })
 
-refreshVoteBridge = function(reason)
+registerVoteBridge = function()
     local generation = (tonumber(rawget(_G, "RGN_VOTE_GENERATION")) or 0) + 1
     rawset(_G, "RGN_VOTE_GENERATION", generation)
     local registered = pcall(function()
@@ -9396,13 +9386,15 @@ refreshVoteBridge = function(reason)
         end)
     end)
     writeRuntime(registered and "callback registered" or "callback registration failed", {
-        reason = reason or "manual",
+        reason = "module load",
         generation = generation,
     })
     return registered
 end
 
-refreshVoteBridge("module load")
+-- As with Killsay, register exactly once. Re-registering FireGameEvent from a
+-- running callback was the native engine2 access-violation path in the dump.
+registerVoteBridge()
 
 callbacks.Register("Unload", function()
     if rawget(_G, "RGN_VOTE_RUNTIME_GENERATION") ~= runtimeGeneration then return end
