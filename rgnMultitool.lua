@@ -1,6 +1,6 @@
--- rgnMultitool v1.1.10: enemy vote names use controller/pawn prop mapping.
+-- rgnMultitool v1.1.11: vote slots map exactly to controller index + 1.
 -- Keeps the proven per-file configuration/cache layout from v1.1.0.
-local RGN_MULTITOOL_VERSION = "1.1.10"
+local RGN_MULTITOOL_VERSION = "1.1.11"
 local RGN_MULTITOOL_SIGNATURE = "RGN_MULTITOOL_SOURCE_V1"
 _G.RGN_MULTITOOL_VERSION = RGN_MULTITOOL_VERSION
 pcall(function()
@@ -9067,36 +9067,21 @@ local function controllerFor(raw)
     raw = tonumber(raw)
     if not raw then return nil, nil end
 
-    -- Current CS2 gameevents define vote_cast.userid and
-    -- vote_started.initiator as player-controller entity ids. Resolve that
-    -- exact controller first; treating it as a legacy UserID can select a
-    -- completely different player and therefore the wrong team.
-    local handleIndex = raw % 32768
+    -- Aimware's original CS2 Vote Reveal defines vote_cast.userid as a
+    -- zero-based player slot: CCSPlayerController:GetIndex() - 1 == userid.
+    -- Mapping raw directly to a controller shifts every name by one player.
+    local controllerIndex = (raw % 32768) + 1
     local controllers
     pcall(function() controllers = entities.FindByClass("CCSPlayerController") end)
     if type(controllers) == "table" then
         for i = 1, #controllers do
             local candidate = entityIndex(controllers[i])
-            if candidate and (candidate == raw or candidate == handleIndex) then
+            if candidate == controllerIndex then
                 return controllers[i], candidate
             end
         end
     end
-
-    -- Compatibility fallback for older/community events that still expose a
-    -- real UserID. Deliberately avoid the former +/-1 heuristic.
-    local index
-    pcall(function()
-        if client and type(client.GetPlayerIndexByUserID) == "function" then
-            index = tonumber(client.GetPlayerIndexByUserID(raw))
-        end
-    end)
-    if index and index > 0 then
-        local entity
-        pcall(function() entity = entities.GetByIndex(index) end)
-        if entity then return entity, index end
-    end
-    return nil, index
+    return nil, controllerIndex
 end
 
 local function playerNameByIndex(index)

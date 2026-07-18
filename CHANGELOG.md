@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.11 - 2026-07-18
+
+### Correct vote slot association
+
+- Applied Aimware Vote Reveal's exact mapping: `CCSPlayerController:GetIndex() - 1 == vote_cast.userid`.
+- Removed the direct raw-slot controller match that shifted initiators, targets and voters to another player's name.
+- Retained bidirectional controller/pawn lookup for allied and enemy players, with chat-only output and no per-frame scan.
+
 ## 1.1.10 - 2026-07-18
 
 ### Enemy player names in votes
