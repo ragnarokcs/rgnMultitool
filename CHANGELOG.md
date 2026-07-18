@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.10 - 2026-07-18
+
+### Enemy player names in votes
+
+- Added Aimware's proven `GetPropEntity` controller-to-pawn path before the field-based compatibility path.
+- Added an event-only inverse pawn-to-controller lookup for dormant enemy controllers, resolving rival initiators, voters and kick targets to their real names.
+- Preserved chat-only vote output and avoided any new Draw or per-frame player scan.
+
 ## 1.1.9 - 2026-07-18
 
 ### Chat-only vote information

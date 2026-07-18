@@ -1,6 +1,6 @@
--- rgnMultitool v1.1.9: vote information is shown only in local chat.
+-- rgnMultitool v1.1.10: enemy vote names use controller/pawn prop mapping.
 -- Keeps the proven per-file configuration/cache layout from v1.1.0.
-local RGN_MULTITOOL_VERSION = "1.1.9"
+local RGN_MULTITOOL_VERSION = "1.1.10"
 local RGN_MULTITOOL_SIGNATURE = "RGN_MULTITOOL_SOURCE_V1"
 _G.RGN_MULTITOOL_VERSION = RGN_MULTITOOL_VERSION
 pcall(function()
@@ -9133,21 +9133,53 @@ local function pawnForController(controller)
     -- Current vote events provide a CCSPlayerController slot, while Aimware's
     -- stable name path operates on the associated player pawn.
     local pawn
-    pcall(function() pawn = controller:GetFieldEntity("m_hPlayerPawn") end)
+    pcall(function() pawn = controller:GetPropEntity("m_hPlayerPawn") end)
+    if not pawn then pcall(function() pawn = controller:GetPropEntity("m_hPawn") end) end
+    if not pawn then pcall(function() pawn = controller:GetFieldEntity("m_hPlayerPawn") end) end
     if not pawn then pcall(function() pawn = controller:GetFieldEntity("m_hPawn") end) end
     local pawnIndex = entityIndex(pawn)
     if pawn and pawnIndex then return pawn, pawnIndex end
 
     -- Compatibility path for builds that expose the CHandle only as an int.
     local handle
-    pcall(function() handle = tonumber(controller:GetFieldInt("m_hPlayerPawn")) end)
-    if not handle then pcall(function() handle = tonumber(controller:GetFieldInt("m_hPawn")) end) end
+    pcall(function() handle = tonumber(controller:GetPropInt("m_hPlayerPawn")) end)
+    if not handle or handle == 0 or handle == -1 then pcall(function() handle = tonumber(controller:GetPropInt("m_hPawn")) end) end
+    if not handle or handle == 0 or handle == -1 then pcall(function() handle = tonumber(controller:GetFieldInt("m_hPlayerPawn")) end) end
+    if not handle or handle == 0 or handle == -1 then pcall(function() handle = tonumber(controller:GetFieldInt("m_hPawn")) end) end
     if handle and handle ~= 0 and handle ~= -1 then
         pawnIndex = handle % 32768
         if pawnIndex > 0 and pawnIndex ~= 32767 then
             pcall(function() pawn = entities.GetByIndex(pawnIndex) end)
             if pawn then return pawn, pawnIndex end
         end
+    end
+    return nil, nil
+end
+
+local function pawnByControllerIndex(controllerIndex)
+    controllerIndex = tonumber(controllerIndex)
+    if not controllerIndex or controllerIndex <= 0 then return nil, nil end
+    controllerIndex = controllerIndex % 32768
+
+    -- Enemy controllers can expose a dormant/empty pawn handle. In that case
+    -- enumerate the small player-pawn list and resolve the relationship in the
+    -- opposite direction through CBasePlayerPawn.m_hController.
+    local pawns
+    pcall(function() pawns = entities.FindByClass("C_CSPlayerPawn") end)
+    if type(pawns) ~= "table" then return nil, nil end
+    for i = 1, #pawns do
+        local pawn = pawns[i]
+        local controller
+        pcall(function() controller = pawn:GetPropEntity("m_hController") end)
+        if not controller then pcall(function() controller = pawn:GetFieldEntity("m_hController") end) end
+        local linkedIndex = entityIndex(controller)
+        if not linkedIndex then
+            local handle
+            pcall(function() handle = tonumber(pawn:GetPropInt("m_hController")) end)
+            if not handle or handle == 0 or handle == -1 then pcall(function() handle = tonumber(pawn:GetFieldInt("m_hController")) end) end
+            if handle and handle ~= 0 and handle ~= -1 then linkedIndex = handle % 32768 end
+        end
+        if linkedIndex == controllerIndex then return pawn, entityIndex(pawn) end
     end
     return nil, nil
 end
@@ -9168,6 +9200,7 @@ local function voterInfo(raw, eventTeam)
     raw = tonumber(raw) or 0
     local entity, index = controllerFor(raw)
     local pawn, pawnIndex = pawnForController(entity)
+    if not pawn then pawn, pawnIndex = pawnByControllerIndex(index or raw) end
     -- Networked controller string fields currently return invalid bytes on
     -- some CS2 builds. Use the same pawn-name route that Killsay uses and never
     -- display raw controller strings in chat or the overlay.
@@ -9182,6 +9215,9 @@ local function voterInfo(raw, eventTeam)
     end
     if name == "" and index then
         name = playerNameByIndex(index)
+    end
+    if name == "" and entity then
+        name = entityPlayerName(entity)
     end
     -- Only interpret raw as a legacy UserID when no controller entity matched;
     -- otherwise the same small number can name a completely different player.
@@ -9204,7 +9240,9 @@ local function voterInfo(raw, eventTeam)
     if team ~= 2 and team ~= 3 then team = playerTeams[raw] or (index and playerTeams[index]) end
     if team ~= 2 and team ~= 3 and entity then
         pcall(function()
-            local value = tonumber(entity:GetFieldInt("m_iTeamNum"))
+            local value
+            pcall(function() value = tonumber(entity:GetPropInt("m_iTeamNum")) end)
+            if not value then value = tonumber(entity:GetFieldInt("m_iTeamNum")) end
             if value == 2 or value == 3 then team = value end
         end)
     end
