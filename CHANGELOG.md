@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.9 - 2026-07-18
+
+### Chat-only vote information
+
+- Removed the right-side voter overlay and its per-frame Draw callback.
+- Vote initiators, targets, choices and results remain visible exclusively in the local in-game chat.
+- Preserved real player-name resolution, team colors and the working left-hand knife behavior.
+
 ## 1.1.8 - 2026-07-18
 
 ### Real names in vote output

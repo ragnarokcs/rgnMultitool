@@ -1,6 +1,6 @@
--- rgnMultitool v1.1.8: vote controllers resolve through their player pawns.
+-- rgnMultitool v1.1.9: vote information is shown only in local chat.
 -- Keeps the proven per-file configuration/cache layout from v1.1.0.
-local RGN_MULTITOOL_VERSION = "1.1.8"
+local RGN_MULTITOOL_VERSION = "1.1.9"
 local RGN_MULTITOOL_SIGNATURE = "RGN_MULTITOOL_SOURCE_V1"
 _G.RGN_MULTITOOL_VERSION = RGN_MULTITOOL_VERSION
 pcall(function()
@@ -8907,7 +8907,7 @@ loadModule("VOTES", function()
 -- work runs outside Draw; Draw only renders the overlay behind a hard
 -- re-entry guard so a Panorama/chat refresh cannot recursively exhaust CS2's
 -- stack.
-local PLAY_SOUND, SHOW_TEAM, DISPLAY_DURATION = true, true, 15
+local PLAY_SOUND, DISPLAY_DURATION = true, 15
 
 local active, order, playerNames, chatQueue = {}, {}, {}, {}
 local preStartVotes, firstNoName = {}, ""
@@ -8915,7 +8915,7 @@ local playerTeams, recentDisconnect = {}, { at = -1000, team = nil, name = "" }
 local currentVoteTeam, currentVoteLabel = nil, ""
 local armed, lastVote, endAt, voteOpen = true, 0, 0, false
 local eventCount, status = 0, "ready"
-local callbackEvents, drawCallbacks = 0, 0
+local callbackEvents = 0
 local nextListenerRefresh, nextSessionPoll, nextLogicTick = 0, 0, 0
 local lastSessionKey
 local registerVoteBridge
@@ -8964,7 +8964,6 @@ local function writeRuntime(reason, values)
             "armed=1",
             "events=" .. tostring(eventCount),
             "callback_events=" .. tostring(callbackEvents),
-            "draw_callbacks=" .. tostring(drawCallbacks),
             "visible=" .. tostring(#order),
             "queued=" .. tostring(#chatQueue),
             "local_chat=" .. clean(localChatStatus or "not initialized"),
@@ -9414,9 +9413,6 @@ M._voteEventCallback = function(event)
     if PLAY_SOUND then pcall(function() client.Command("play buttons\\button14.wav", true) end) end
 end
 
-local font
-pcall(function() font = draw.CreateFont("Segoe UI", 13, 500, false, true) end)
-
 local function sendQueued(t)
     if #chatQueue == 0 then return end
     local count = 0
@@ -9455,40 +9451,6 @@ local function sendQueued(t)
     end
 end
 
-local function renderVotes()
-    if #order == 0 then return end
-    local sw, sh = draw.GetScreenSize()
-    local width, lineHeight = 248, 40
-    local x = sw - width - 18
-    local y = math.floor(sh * 0.50 - (#order * lineHeight) * 0.50)
-    local frame = 1 / 60
-    pcall(function() frame = math.min(0.05, math.max(0.001, globals.FrameTime())) end)
-    if font then pcall(function() draw.SetFont(font) end) end
-
-    for i = 1, #order do
-        local item = active[order[i]]
-        if item then
-            item.alpha = math.min(1, (item.alpha or 0) + frame * 5)
-            item.slide = math.max(0, (item.slide or 0) - frame * 260)
-            local px, py, a = x + item.slide, y + (i - 1) * lineHeight, item.alpha
-            local yes = item.option == 0
-            local r, g, b = yes and 50 or 245, yes and 205 or 75, yes and 120 or 85
-            draw.Color(8, 12, 18, math.floor(225 * a))
-            draw.RoundedRectFill(px, py, px + width, py + 34, 6)
-            draw.Color(r, g, b, math.floor(255 * a))
-            draw.FilledRect(px, py, px + 4, py + 34)
-            draw.Color(235, 239, 246, math.floor(255 * a))
-            local label = item.name
-            if #label > 25 then label = label:sub(1, 24) .. "..." end
-            draw.Text(px + 12, py + 4, label)
-            draw.Color(145, 155, 170, math.floor(255 * a))
-            draw.Text(px + 12, py + 19, SHOW_TEAM and (item.team .. "  |  voter") or "voter")
-            draw.Color(r, g, b, math.floor(255 * a))
-            draw.Text(px + width - 58, py + 10, yes and "F1 YES" or (item.option == 1 and "F2 NO" or ("OPT " .. tostring(item.option + 1))))
-        end
-    end
-end
-
 local function voteLogicTick()
     local t = clock()
     if t < nextLogicTick then return end
@@ -9512,24 +9474,12 @@ local function voteLogicTick()
     if endAt > 0 and t >= endAt then clearVote("ready"); return end
 end
 
-local function voteDrawTick()
-    renderVotes()
-end
-
 pcall(function() callbacks.Unregister("Draw", "rgnMultitool_VoteDraw") end)
 pcall(function() callbacks.Unregister("CreateMove", "rgnMultitool_VoteLogic") end)
 pcall(function() callbacks.Unregister("FireGameEvent", "rgnMultitool_VoteEvents") end)
 local runtimeGeneration = (tonumber(rawget(_G, "RGN_VOTE_RUNTIME_GENERATION")) or 0) + 1
 rawset(_G, "RGN_VOTE_RUNTIME_GENERATION", runtimeGeneration)
-local drawBusy, logicBusy, eventBusy = false, false, false
-callbacks.Register("Draw", function()
-    if rawget(_G, "RGN_VOTE_RUNTIME_GENERATION") ~= runtimeGeneration or drawBusy then return end
-    drawBusy = true
-    drawCallbacks = drawCallbacks + 1
-    local ok, err = pcall(voteDrawTick)
-    if not ok then writeRuntime("draw callback error", { error = tostring(err), draws = drawCallbacks }) end
-    drawBusy = false
-end)
+local logicBusy, eventBusy = false, false
 callbacks.Register("CreateMove", function()
     if rawget(_G, "RGN_VOTE_RUNTIME_GENERATION") ~= runtimeGeneration or logicBusy then return end
     logicBusy = true
