@@ -31,8 +31,8 @@ Source-visible Aimware Lua toolkit for CS2. Every module lives in one compact me
 ### Vote information
 
 - Always-on vote revealer with fully English, team-colored local chat messages and no separate HUD overlay.
-- Reliable allied and enemy initiator, voter and kick-target names resolved bidirectionally between player controllers and pawns.
-- Version 1.1.10 retains the one-time Killsay and vote event bridges; session transitions renew listeners and state without mutating Aimware's native callback registry.
+- Reliable allied and enemy initiator, voter and kick-target names resolved from the exact zero-based vote slot and bidirectionally between controllers and pawns.
+- Version 1.1.11 retains the one-time Killsay and vote event bridges; session transitions renew listeners and state without mutating Aimware's native callback registry.
 - The release keeps the proven per-file configuration and cache layout from 1.1.0; it does not use the reverted unified-storage experiment.
 
 ### Reliability
