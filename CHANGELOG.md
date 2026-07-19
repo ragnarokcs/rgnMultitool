@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.2 - 2026-07-19
+
+### Safe event bridge and halftime crash fix
+
+- Consolidated Killsay, Custom Sounds and Vote Revealer behind one persistent `FireGameEvent` bridge so Lua reloads and server transitions cannot accumulate native event callbacks.
+- Stopped querying the nonexistent `name` string on CS2 `player_team` events, which passed a null string into Aimware's native event wrapper and crashed during halftime team swaps.
+- Kept player identity resolution for team changes through the existing UserID and controller caches, preserving vote names without unsafe event-field reads.
+- Preserved all existing modules, settings and the local chat-only vote output.
+
 ## 1.2.1 - 2026-07-18
 
 ### Reliable enemy vote identities and team vote types

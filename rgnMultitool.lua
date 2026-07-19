@@ -1,6 +1,6 @@
--- rgnMultitool v1.2.1: corrected vote identities and team vote types.
+-- rgnMultitool v1.2.2: safe event bridge and halftime team-swap crash fix.
 -- Keeps the proven per-file configuration/cache layout from v1.1.0.
-local RGN_MULTITOOL_VERSION = "1.2.1"
+local RGN_MULTITOOL_VERSION = "1.2.2"
 local RGN_MULTITOOL_SIGNATURE = "RGN_MULTITOOL_SOURCE_V1"
 _G.RGN_MULTITOOL_VERSION = RGN_MULTITOOL_VERSION
 pcall(function()
@@ -9,6 +9,8 @@ pcall(function()
     pcall(callbacks.Unregister, "CreateMove", "rgnMultitool_MISCLogicMove")
     pcall(callbacks.Unregister, "FireGameEvent", "rgnMultitool_MISCEvents")
     pcall(callbacks.Unregister, "FireGameEvent", "rgnMultitool_WeaponsSessionEvents")
+    pcall(callbacks.Unregister, "FireGameEvent", "rgnMultitool_GameEvents")
+    pcall(callbacks.Unregister, "Unload", "rgnMultitool_GameEventsUnload")
     pcall(callbacks.Unregister, "Unload", "rgnMultitool_MISCUnload")
     if type(M) == "table" and type(M.Watermark) == "function" then pcall(M.Watermark, M, false) end
 end)-- rgnMultitool - unified Aimware CS2 toolkit.
@@ -8075,7 +8077,6 @@ local RUNTIME_FILE = "rgnkillsay_runtime.txt"
 local callbackEvents = 0
 local runtimeHistory = {}
 local armed = false
-local registerEventBridge
 local nextSessionPoll, nextListenerRefresh = 0, 0
 local lastSessionKey, sessionEpoch = nil, 0
 
@@ -8759,42 +8760,8 @@ M._killsayEventCallback = function(event)
     })
 end
 
-pcall(function()
-    callbacks.Unregister("FireGameEvent", "rgnMultitool_KillsayEvents")
-end)
-
 requestKillsayListeners()
 lastSessionKey = currentSessionKey()
-
-registerEventBridge = function()
-    local generation = (tonumber(rawget(_G, "RGN_KILLSAY_GENERATION")) or 0) + 1
-    rawset(_G, "RGN_KILLSAY_GENERATION", generation)
-    local registered = pcall(function()
-        -- Match the working Aimware scripts exactly: anonymous two-argument
-        -- hook. Older hooks become inert through the generation gate.
-        callbacks.Register("FireGameEvent", function(event)
-            if rawget(_G, "RGN_KILLSAY_GENERATION") ~= generation then return end
-            if type(M._killsayEventCallback) == "function" then
-                local ok, err = pcall(M._killsayEventCallback, event)
-                if not ok then writeRuntime("callback error", { error = tostring(err) }) end
-            end
-            if type(M._customSoundsEventCallback) == "function" then
-                local ok, err = pcall(M._customSoundsEventCallback, event)
-                if not ok then print("[rgnSounds] event error: " .. tostring(err)) end
-            end
-        end)
-    end)
-    writeRuntime(registered and "callback registered" or "callback registration failed", {
-        generation = generation,
-        reason = "module load",
-    })
-    return registered
-end
-
--- Register once while the module is loading. Aimware's native callback registry
--- is not safe to mutate from Draw/CreateMove during a map or server transition.
--- Session changes only renew AllowListener subscriptions and reset Lua state.
-registerEventBridge()
 
 print("[rgnKillsay] loaded | opt-in | clean packs + Argentina + custom")
 end)
@@ -9254,7 +9221,6 @@ local eventCount, status = 0, "ready"
 local callbackEvents = 0
 local nextListenerRefresh, nextSessionPoll, nextLogicTick = 0, 0, 0
 local lastSessionKey
-local registerVoteBridge
 local RUNTIME_FILE = "rgnvotes_runtime.txt"
 local runtimeHistory = {}
 local localChatPrint, localChatStatus
@@ -9790,7 +9756,13 @@ M._voteEventCallback = function(event)
         local oldTeam = eventInt(event, "oldteam")
         local disconnected = name == "player_disconnect" or eventBool(event, "disconnect")
         if raw and raw > 0 then
-            local playerName = eventString(event, "name")
+            -- CS2's player_team schema has no string field named "name".
+            -- Aimware's GameEvent wrapper forwards a null default to strlen
+            -- when that missing field is queried, which crashes exactly at the
+            -- halftime TT/CT swap. player_disconnect does define the field;
+            -- team changes must resolve identity from our slot/UserID cache.
+            local playerName = ""
+            if name == "player_disconnect" then playerName = eventString(event, "name") end
             if playerName == "" then playerName = clean(namesByUserID[raw] or "") end
             if playerName == "" then playerName = playerNameByUserID(raw) end
             local resolvedTeam = eventTeam
@@ -10008,8 +9980,8 @@ pcall(function() callbacks.Unregister("CreateMove", "rgnMultitool_VoteLogic") en
 pcall(function() callbacks.Unregister("FireGameEvent", "rgnMultitool_VoteEvents") end)
 local runtimeGeneration = (tonumber(rawget(_G, "RGN_VOTE_RUNTIME_GENERATION")) or 0) + 1
 rawset(_G, "RGN_VOTE_RUNTIME_GENERATION", runtimeGeneration)
-local logicBusy, eventBusy = false, false
-callbacks.Register("CreateMove", function()
+local logicBusy = false
+callbacks.Register("CreateMove", "rgnMultitool_VoteLogic", function()
     if rawget(_G, "RGN_VOTE_RUNTIME_GENERATION") ~= runtimeGeneration or logicBusy then return end
     logicBusy = true
     local ok, err = pcall(voteLogicTick)
@@ -10021,45 +9993,91 @@ lastSessionKey = sessionKey()
 initLocalChat()
 writeRuntime("module loaded", { session = lastSessionKey, chat = localChatStatus })
 
-registerVoteBridge = function()
-    local generation = (tonumber(rawget(_G, "RGN_VOTE_GENERATION")) or 0) + 1
-    rawset(_G, "RGN_VOTE_GENERATION", generation)
-    local registered = pcall(function()
-        -- Aimware v6 reliably delivers these events through the anonymous
-        -- two-argument registration used by the original Vote Reveal script.
-        callbacks.Register("FireGameEvent", function(event)
-            if rawget(_G, "RGN_VOTE_GENERATION") ~= generation or eventBusy then return end
-            if type(M._voteEventCallback) == "function" then
-                eventBusy = true
-                local ok, err = pcall(M._voteEventCallback, event)
-                if not ok then
-                    print("[rgnVotes] event error: " .. tostring(err))
-                    writeRuntime("callback error", { error = tostring(err), generation = generation })
-                end
-                eventBusy = false
-            end
-        end)
-    end)
-    writeRuntime(registered and "callback registered" or "callback registration failed", {
-        reason = "module load",
-        generation = generation,
-    })
-    return registered
-end
-
--- As with Killsay, register exactly once. Re-registering FireGameEvent from a
--- running callback was the native engine2 access-violation path in the dump.
-registerVoteBridge()
-
 callbacks.Register("Unload", function()
     if rawget(_G, "RGN_VOTE_RUNTIME_GENERATION") ~= runtimeGeneration then return end
     rawset(_G, "RGN_VOTE_RUNTIME_GENERATION", runtimeGeneration + 1)
-    rawset(_G, "RGN_VOTE_GENERATION", (tonumber(rawget(_G, "RGN_VOTE_GENERATION")) or 0) + 1)
-    drawBusy, logicBusy, eventBusy = false, false, false
+    pcall(callbacks.Unregister, "CreateMove", "rgnMultitool_VoteLogic")
+    logicBusy = false
 end)
 
 print("[rgnVotes] built-in service loaded | always on | safe logic + local chat + overlay")
 end)
+
+-- Aimware v6 only delivers these particular CS2 events reliably through its
+-- anonymous FireGameEvent overload. Keep exactly one process-wide bridge whose
+-- closure captures no module state. Lua reloads only replace state.dispatch;
+-- they never add another native callback or leave a stale GameEvent consumer.
+do
+    local callbackId = "rgnMultitool_GameEvents"
+    local unloadId = "rgnMultitool_GameEventsUnload"
+    local bridgeKey = "RGN_MULTITOOL_EVENT_BRIDGE_V1"
+    local dispatchBusy = false
+    local handlers = {
+        { field = "_killsayEventCallback", label = "Killsay" },
+        { field = "_customSoundsEventCallback", label = "Sounds" },
+        { field = "_voteEventCallback", label = "Votes" },
+    }
+
+    local function dispatchGameEvent(event)
+        if dispatchBusy or event == nil then return end
+        dispatchBusy = true
+        for i = 1, #handlers do
+            local entry = handlers[i]
+            local handler = M[entry.field]
+            if type(handler) == "function" then
+                local ok, err = pcall(handler, event)
+                if not ok then
+                    print(string.format("[rgnMultitool] %s event error: %s", entry.label, tostring(err)))
+                end
+            end
+        end
+        dispatchBusy = false
+    end
+
+    local bridge = rawget(_G, bridgeKey)
+    if type(bridge) ~= "table" then
+        bridge = { registered = false, token = 0, events = 0 }
+        rawset(_G, bridgeKey, bridge)
+    end
+    bridge.token = (tonumber(bridge.token) or 0) + 1
+    local token = bridge.token
+    bridge.dispatch = dispatchGameEvent
+
+    pcall(callbacks.Unregister, "FireGameEvent", callbackId)
+    pcall(callbacks.Unregister, "Unload", unloadId)
+    if bridge.registered ~= true then
+        local registered, registerError = pcall(function()
+            callbacks.Register("FireGameEvent", function(event)
+                local current = rawget(_G, bridgeKey)
+                if type(current) ~= "table" then return end
+                local dispatcher = current.dispatch
+                if type(dispatcher) ~= "function" then return end
+                current.events = (tonumber(current.events) or 0) + 1
+                local ok, err = pcall(dispatcher, event)
+                if not ok then
+                    current.lastError = tostring(err)
+                    print("[rgnMultitool] event bridge error: " .. tostring(err))
+                end
+            end)
+        end)
+        bridge.registered = registered == true
+        if not registered then
+            print("[rgnMultitool] stable event bridge failed: " .. tostring(registerError))
+        end
+    end
+
+    callbacks.Register("Unload", unloadId, function()
+        local current = rawget(_G, bridgeKey)
+        if type(current) == "table" and current.token == token then
+            current.dispatch = nil
+        end
+        M._killsayEventCallback = nil
+        M._customSoundsEventCallback = nil
+        M._voteEventCallback = nil
+        dispatchBusy = false
+        pcall(callbacks.Unregister, "Unload", unloadId)
+    end)
+end
 
 do
     local wanted = { "WEAPONS", "AGENTS", "SKINS CUSTOM", "VIEWMODEL", "CUSTOM SOUNDS", "MOVEMENT", "IDENTITY", "KILLSAY", "CONFIGS" }
