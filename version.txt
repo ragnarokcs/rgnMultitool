@@ -1,4 +1,4 @@
-version=1.1.11
+version=1.2.0
 source=rgnMultitool.lua
 min_bytes=300000
 signature=RGN_MULTITOOL_SOURCE_V1
