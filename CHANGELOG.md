@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.1 - 2026-07-18
+
+### Reliable enemy vote identities and team vote types
+
+- Separated zero-based vote slots, entity indices and player UserIDs so one cached name can no longer overwrite every voter in an opposing-team vote.
+- Added live controller/pawn name resolution plus isolated fallback caches for enemy and dormant players.
+- Read the current vote issue from `start_vote` and `C_VoteController`, allowing team timeouts and surrenders to be distinguished by their real issue index.
+- Removed the unreliable assumption that any vote after a disconnect must be a surrender; unknown votes remain explicitly unknown instead of being mislabeled.
+
 ## 1.2.0 - 2026-07-18
 
 ### Custom hit and kill sounds
