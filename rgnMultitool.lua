@@ -1,6 +1,6 @@
--- rgnMultitool v1.2.0: portable custom hit and kill sounds.
+-- rgnMultitool v1.2.1: corrected vote identities and team vote types.
 -- Keeps the proven per-file configuration/cache layout from v1.1.0.
-local RGN_MULTITOOL_VERSION = "1.2.0"
+local RGN_MULTITOOL_VERSION = "1.2.1"
 local RGN_MULTITOOL_SIGNATURE = "RGN_MULTITOOL_SOURCE_V1"
 _G.RGN_MULTITOOL_VERSION = RGN_MULTITOOL_VERSION
 pcall(function()
@@ -9237,10 +9237,18 @@ loadModule("VOTES", function()
 -- stack.
 local PLAY_SOUND, DISPLAY_DURATION = true, 15
 
-local active, order, playerNames, chatQueue = {}, {}, {}, {}
+local active, order, chatQueue = {}, {}, {}
+-- These numbers are not interchangeable in Source 2. vote_cast.userid is a
+-- zero-based controller slot, player events expose UserIDs and entity APIs use
+-- one-based entity indices. Keeping them in one table made slot 1 inherit the
+-- name cached for controller index 1 (slot 0), then cascaded that name through
+-- the rest of an enemy vote.
+local namesByUserID, namesByIndex, voteSlotNames = {}, {}, {}
+local teamsByUserID, teamsByIndex, voteSlotTeams = {}, {}, {}
 local preStartVotes, firstNoName = {}, ""
-local playerTeams, recentDisconnect = {}, { at = -1000, team = nil, name = "" }
+local recentDisconnect = { at = -1000, team = nil, name = "" }
 local currentVoteTeam, currentVoteLabel = nil, ""
+local pendingVoteHint = { at = -1000, team = nil, label = "", issue = nil, parameter = nil }
 local armed, lastVote, endAt, voteOpen = true, 0, 0, false
 local eventCount, status = 0, "ready"
 local callbackEvents = 0
@@ -9338,7 +9346,7 @@ local function requestListeners()
     pcall(function()
         if not client or type(client.AllowListener) ~= "function" then return end
         for _, name in ipairs({
-            "vote_started", "vote_begin", "vote_cast", "vote_changed", "vote_options",
+            "vote_started", "vote_begin", "start_vote", "vote_cast", "vote_changed", "vote_options",
             "vote_ended", "vote_failed", "vote_passed", "player_connect",
             "player_info", "player_team", "player_disconnect", "server_spawn",
             "game_newmap", "cs_game_disconnected"
@@ -9509,6 +9517,132 @@ local function entityPlayerName(entity)
     return name
 end
 
+local function controllerFieldName(entity)
+    if not entity then return "" end
+    local value = ""
+    for _, field in ipairs({ "m_sSanitizedPlayerName", "m_iszPlayerName" }) do
+        pcall(function() value = entity:GetFieldString(field) end)
+        value = clean(value)
+        if value ~= "" and value ~= "CCSPlayerController" then return value end
+        pcall(function() value = entity:GetPropString(field) end)
+        value = clean(value)
+        if value ~= "" and value ~= "CCSPlayerController" then return value end
+    end
+    return ""
+end
+
+local function entityInt(entity, field)
+    local value
+    if not entity then return nil end
+    pcall(function() value = tonumber(entity:GetPropInt(field)) end)
+    if value == nil then pcall(function() value = tonumber(entity:GetFieldInt(field)) end) end
+    return value
+end
+
+local function voteIssueIndexLabel(issue, team)
+    issue = tonumber(issue)
+    team = tonumber(team)
+    if issue == nil then return nil end
+    if team == 2 or team == 3 then
+        if issue == 0 then return "KICK PLAYER" end
+        if issue == 1 then return "TIMEOUT" end
+        if issue == 2 then return "SURRENDER" end
+        return nil
+    end
+    if issue == 0 then return "KICK PLAYER" end
+    if issue == 1 then return "CHANGE MAP" end
+    if issue == 3 then return "SCRAMBLE TEAMS" end
+    if issue == 4 then return "SWAP TEAMS" end
+    return nil
+end
+
+local function controllerVoteLabel(team)
+    if not entities or type(entities.FindByClass) ~= "function" then return nil, nil end
+    local seen, candidates = {}, {}
+    for _, className in ipairs({ "CVoteController", "C_VoteController" }) do
+        local list
+        pcall(function() list = entities.FindByClass(className) end)
+        if type(list) == "table" then
+            for i = 1, #list do
+                local entity = list[i]
+                local index = entityIndex(entity) or tostring(entity)
+                if not seen[index] then
+                    seen[index] = true
+                    candidates[#candidates + 1] = entity
+                end
+            end
+        end
+    end
+    local fallbackIssue, fallbackTeam
+    for i = 1, #candidates do
+        local entity = candidates[i]
+        local issue = entityInt(entity, "m_iActiveIssueIndex")
+        local onlyTeam = entityInt(entity, "m_iOnlyTeamToVote")
+        if issue ~= nil and (onlyTeam == team or (team == nil and (onlyTeam == 2 or onlyTeam == 3))) then
+            return voteIssueIndexLabel(issue, onlyTeam or team), issue
+        end
+        if issue ~= nil and fallbackIssue == nil then
+            fallbackIssue, fallbackTeam = issue, onlyTeam
+        end
+    end
+    if team == nil and fallbackIssue ~= nil then
+        return voteIssueIndexLabel(fallbackIssue, fallbackTeam), fallbackIssue
+    end
+    return nil, fallbackIssue
+end
+
+local function activeTimeoutLabel(team)
+    if not entities or type(entities.FindByClass) ~= "function" then return nil end
+    local flag = team == 2 and "m_bTerroristTimeOutActive"
+        or (team == 3 and "m_bCTTimeOutActive" or nil)
+    if not flag then return nil end
+    for _, className in ipairs({ "CCSGameRulesProxy", "C_CSGameRulesProxy" }) do
+        local proxies
+        pcall(function() proxies = entities.FindByClass(className) end)
+        if type(proxies) == "table" then
+            for i = 1, #proxies do
+                local proxy, rules = proxies[i], nil
+                pcall(function() rules = proxy:GetFieldEntity("m_pGameRules") end)
+                if not rules then pcall(function() rules = proxy:GetPropEntity("m_pGameRules") end) end
+                if entityInt(rules or proxy, flag) == 1 or entityInt(proxy, flag) == 1 then
+                    return "TIMEOUT"
+                end
+            end
+        end
+    end
+    return nil
+end
+
+local function hintedVoteLabel(team)
+    local age = clock() - (tonumber(pendingVoteHint.at) or -1000)
+    if age < 0 or age > 3.0 then return nil end
+    if pendingVoteHint.team == nil or team == nil or pendingVoteHint.team == team then
+        return pendingVoteHint.label ~= "" and pendingVoteHint.label or nil
+    end
+    return nil
+end
+
+local function bestVoteLabel(team)
+    local label, issue = controllerVoteLabel(team)
+    if label then return label, issue, "controller" end
+    label = hintedVoteLabel(team)
+    if label then return label, pendingVoteHint.issue, "start_vote" end
+    label = activeTimeoutLabel(team)
+    if label then return label, issue, "game_rules" end
+    return nil, issue, "none"
+end
+
+local function replaceQueuedVoteLabel(label)
+    if not label or label == "" then return end
+    for i = 1, #chatQueue do
+        local entry = chatQueue[i]
+        if type(entry) == "table" and type(entry.text) == "string" then
+            entry.text = entry.text:gsub("TEAM VOTE %(UNKNOWN TYPE%)", label)
+                :gsub("UNKNOWN VOTE", label)
+        end
+    end
+end
+
 local function voterInfo(raw, eventTeam)
     raw = tonumber(raw) or 0
     local entity, index = controllerFor(raw)
@@ -9517,12 +9651,7 @@ local function voterInfo(raw, eventTeam)
     -- Networked controller string fields currently return invalid bytes on
     -- some CS2 builds. Use the same pawn-name route that Killsay uses and never
     -- display raw controller strings in chat or the overlay.
-    local name = clean(playerNames[raw] or (index and playerNames[index])
-        or (pawnIndex and playerNames[pawnIndex]) or "")
-    name = clean(name)
-    if name == "" and pawn then
-        name = entityPlayerName(pawn)
-    end
+    local name = pawn and entityPlayerName(pawn) or ""
     if name == "" and pawnIndex then
         name = playerNameByIndex(pawnIndex)
     end
@@ -9532,37 +9661,48 @@ local function voterInfo(raw, eventTeam)
     if name == "" and entity then
         name = entityPlayerName(entity)
     end
+    if name == "" and entity then name = controllerFieldName(entity) end
+    if name == "" then name = clean(voteSlotNames[raw] or "") end
+    if name == "" and index then name = clean(namesByIndex[index] or "") end
+    if name == "" and pawnIndex then name = clean(namesByIndex[pawnIndex] or "") end
     -- Only interpret raw as a legacy UserID when no controller entity matched;
     -- otherwise the same small number can name a completely different player.
     if name == "" and not entity then
-        name = playerNameByUserID(raw)
+        name = clean(namesByUserID[raw] or "")
+        if name == "" then name = playerNameByUserID(raw) end
     end
     if name == "" then
         name = "player #" .. tostring(raw)
     else
         -- Do not cache the numeric fallback: a player API can become available
         -- a few frames later while the same vote is still in progress.
-        playerNames[raw] = name
-        if index then playerNames[index] = name end
-        if pawnIndex then playerNames[pawnIndex] = name end
+        voteSlotNames[raw] = name
+        if index then namesByIndex[index] = name end
+        if pawnIndex then namesByIndex[pawnIndex] = name end
     end
 
     -- The vote event's team is authoritative. Entity lookup is only a
     -- fallback when the server omitted it; it must never override a valid 2/3.
     local team = tonumber(eventTeam)
-    if team ~= 2 and team ~= 3 then team = playerTeams[raw] or (index and playerTeams[index]) end
     if team ~= 2 and team ~= 3 and entity then
-        pcall(function()
-            local value
-            pcall(function() value = tonumber(entity:GetPropInt("m_iTeamNum")) end)
-            if not value then value = tonumber(entity:GetFieldInt("m_iTeamNum")) end
-            if value == 2 or value == 3 then team = value end
-        end)
+        local value = entityInt(entity, "m_iTeamNum")
+        if value == 2 or value == 3 then team = value end
+    end
+    if team ~= 2 and team ~= 3 and pawn then
+        local value = entityInt(pawn, "m_iTeamNum")
+        if value == 2 or value == 3 then team = value end
+    end
+    if team ~= 2 and team ~= 3 then
+        team = voteSlotTeams[raw] or (index and teamsByIndex[index])
+            or (pawnIndex and teamsByIndex[pawnIndex])
+    end
+    if team ~= 2 and team ~= 3 and not entity then
+        team = teamsByUserID[raw]
     end
     if team == 2 or team == 3 then
-        playerTeams[raw] = team
-        if index then playerTeams[index] = team end
-        if pawnIndex then playerTeams[pawnIndex] = team end
+        voteSlotTeams[raw] = team
+        if index then teamsByIndex[index] = team end
+        if pawnIndex then teamsByIndex[pawnIndex] = team end
     end
     local teamName = team == 2 and "T" or (team == 3 and "CT" or "SPEC")
     return name, teamName, team
@@ -9625,8 +9765,10 @@ M._voteEventCallback = function(event)
         -- A passed change-map vote can emit game_newmap before Draw gets a
         -- chance to print. Keep those already-resolved local chat messages.
         clearVote("session rearmed", true)
-        playerNames, playerTeams = {}, {}
+        namesByUserID, namesByIndex, voteSlotNames = {}, {}, {}
+        teamsByUserID, teamsByIndex, voteSlotTeams = {}, {}, {}
         recentDisconnect = { at = -1000, team = nil, name = "" }
+        pendingVoteHint = { at = -1000, team = nil, label = "", issue = nil, parameter = nil }
         writeRuntime("session event", { event = name, callbacks = callbackEvents, preserved = #chatQueue })
         return
     end
@@ -9634,8 +9776,11 @@ M._voteEventCallback = function(event)
         local user = eventInt(event, "userid")
         local entityID = eventInt(event, "entityid")
         local playerName = eventString(event, "name")
-        if user and playerName ~= "" then playerNames[user] = playerName end
-        if entityID and playerName ~= "" then playerNames[entityID] = playerName end
+        if user and playerName ~= "" then namesByUserID[user] = playerName end
+        if entityID and playerName ~= "" then
+            namesByIndex[entityID] = playerName
+            if entityID > 0 then voteSlotNames[entityID - 1] = playerName end
+        end
         return
     end
     if name == "player_team" or name == "player_disconnect" then
@@ -9645,9 +9790,14 @@ M._voteEventCallback = function(event)
         local oldTeam = eventInt(event, "oldteam")
         local disconnected = name == "player_disconnect" or eventBool(event, "disconnect")
         if raw and raw > 0 then
-            local playerName, _, resolvedTeam = voterInfo(raw, eventTeam)
+            local playerName = eventString(event, "name")
+            if playerName == "" then playerName = clean(namesByUserID[raw] or "") end
+            if playerName == "" then playerName = playerNameByUserID(raw) end
+            local resolvedTeam = eventTeam
+            if resolvedTeam ~= 2 and resolvedTeam ~= 3 then resolvedTeam = teamsByUserID[raw] end
+            if playerName == "" then playerName = "player #" .. tostring(raw) end
             local team = (oldTeam == 2 or oldTeam == 3) and oldTeam or resolvedTeam
-            if not disconnected and (eventTeam == 2 or eventTeam == 3) then playerTeams[raw] = eventTeam end
+            if not disconnected and (eventTeam == 2 or eventTeam == 3) then teamsByUserID[raw] = eventTeam end
             if disconnected then
                 recentDisconnect = { at = clock(), team = team, name = playerName }
                 writeRuntime("player disconnected", { raw = raw, name = playerName, team = team })
@@ -9656,6 +9806,21 @@ M._voteEventCallback = function(event)
         return
     end
     if not armed then return end
+
+    if name == "start_vote" then
+        local raw = eventInt(event, "userid") or 0
+        local _, _, team = voterInfo(raw, eventInt(event, "team"))
+        local issue = eventInt(event, "type")
+        local parameter = eventInt(event, "vote_parameter")
+        local label = voteIssueIndexLabel(issue, team)
+        pendingVoteHint = {
+            at = clock(), team = team, label = label or "", issue = issue, parameter = parameter,
+        }
+        writeRuntime("start vote hint", {
+            raw = raw, team = team, issue = issue, parameter = parameter, label = label or "unknown",
+        })
+        return
+    end
 
     if name == "vote_started" or name == "vote_begin" then
         active, order, preStartVotes, firstNoName = {}, {}, {}, ""
@@ -9667,6 +9832,12 @@ M._voteEventCallback = function(event)
         local initiatorName, teamName, team = voterInfo(initiator, eventInt(event, "team"))
         local issue = eventString(event, "issue")
         local label = voteLabel(issue)
+        local source, issueIndex
+        if label == "UNKNOWN VOTE" then
+            local detected
+            detected, issueIndex, source = bestVoteLabel(team)
+            if detected then label = detected end
+        end
         currentVoteTeam, currentVoteLabel = team, label
         local target = voteTargetName(event)
         status = initiatorName .. " started " .. label
@@ -9675,7 +9846,8 @@ M._voteEventCallback = function(event)
         eventCount = eventCount + 1
         writeRuntime("vote started", {
             initiator = initiator, name = initiatorName, team = teamName,
-            issue = issue, label = label, target = target, callbacks = callbackEvents,
+            issue = issue, issue_index = issueIndex, source = source,
+            label = label, target = target, callbacks = callbackEvents,
         })
         return
     end
@@ -9712,6 +9884,11 @@ M._voteEventCallback = function(event)
 
     local voter, teamName, team = voterInfo(raw, eventInt(event, "team"))
     local choice = option == 0 and "YES (F1)" or (option == 1 and "NO (F2)" or ("OPTION " .. tostring(option + 1)))
+    local detectedLabel, detectedIssue, detectedSource = bestVoteLabel(team)
+    if detectedLabel and (currentVoteLabel == "" or currentVoteLabel:find("UNKNOWN", 1, true)) then
+        currentVoteLabel = detectedLabel
+        replaceQueuedVoteLabel(detectedLabel)
+    end
     if not voteOpen and option == 1 then
         -- CS2 often sends the kick target's automatic F2 before the caller's
         -- F1 and omits vote_started. Preserve it until the initiator arrives.
@@ -9741,9 +9918,7 @@ M._voteEventCallback = function(event)
         if firstNoName ~= "" then
             label = "KICK PLAYER"
         else
-            local elapsed = clock() - (tonumber(recentDisconnect.at) or -1000)
-            local sameTeam = recentDisconnect.team == nil or team == nil or recentDisconnect.team == team
-            label = elapsed >= 0 and elapsed <= 45 and sameTeam and "SURRENDER" or "TEAM VOTE (UNKNOWN TYPE)"
+            label = detectedLabel or "TEAM VOTE (UNKNOWN TYPE)"
         end
         currentVoteTeam, currentVoteLabel = team, label
         queueChat(teamName, string.format("%s started vote: %s%s", voter, label,
@@ -9760,7 +9935,10 @@ M._voteEventCallback = function(event)
     status = voter .. " voted " .. choice
     queueChat(teamName, string.format("%s voted %s%s", voter, choice,
         currentVoteLabel ~= "" and (" | " .. currentVoteLabel) or ""))
-    writeRuntime("vote cast", { raw = raw, name = voter, team = teamName, option = option, choice = choice })
+    writeRuntime("vote cast", {
+        raw = raw, name = voter, team = teamName, option = option, choice = choice,
+        issue = detectedIssue, source = detectedSource, label = currentVoteLabel,
+    })
     if PLAY_SOUND then pcall(function() client.Command("play buttons\\button14.wav", true) end) end
 end
 
