@@ -28,6 +28,12 @@ Source-visible Aimware Lua toolkit for CS2. Every module lives in one compact me
 - Killsay with multilingual message packs, random/sequential order, custom templates and optional victim names.
 - Identity and Killsay features are opt-in and disabled by default.
 
+### Custom sounds
+
+- Independent custom hit and kill sounds with volume controls and preview buttons.
+- Place compiled `.vsnd_c` files directly in `Counter-Strike Global Offensive/game/csgo/sounds`, then press **Refresh csgo/sounds**.
+- Sound scanning occurs only at Lua startup or on manual refresh; both effects are disabled by default.
+
 ### Vote information
 
 - Always-on vote revealer with fully English, team-colored local chat messages and no separate HUD overlay.

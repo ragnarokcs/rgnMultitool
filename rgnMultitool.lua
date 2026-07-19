@@ -1,6 +1,6 @@
--- rgnMultitool v1.1.11: vote slots map exactly to controller index + 1.
+-- rgnMultitool v1.2.0: portable custom hit and kill sounds.
 -- Keeps the proven per-file configuration/cache layout from v1.1.0.
-local RGN_MULTITOOL_VERSION = "1.1.11"
+local RGN_MULTITOOL_VERSION = "1.2.0"
 local RGN_MULTITOOL_SIGNATURE = "RGN_MULTITOOL_SOURCE_V1"
 _G.RGN_MULTITOOL_VERSION = RGN_MULTITOOL_VERSION
 pcall(function()
@@ -7445,6 +7445,329 @@ end)
 print("[rgnMovement] loaded | callback=main multitool hook | velocity/trail/edge/null ready")
 end)
 
+loadModule("CUSTOM SOUNDS", function()
+local M = M
+
+-- Compatible with femboytap's sound pack: place compiled .vsnd_c files in
+-- game/csgo/sounds. Discovery happens once at load and only when Refresh is
+-- pressed; no directory scan runs during gameplay.
+local CONFIG_FILE = "rgncustomsounds_config.txt"
+local f = rawget(_G, "ffi")
+local config = {}
+local soundDir, soundNames, soundPaths = nil, {}, {}
+local hitComboWidget, killComboWidget
+local nextConfigPoll, nextListenerRefresh, observedConfig = 0, 0, nil
+
+local function clock()
+    local value = 0
+    pcall(function()
+        if common and type(common.Time) == "function" then value = common.Time()
+        elseif globals and type(globals.RealTime) == "function" then value = globals.RealTime()
+        elseif globals and type(globals.CurTime) == "function" then value = globals.CurTime() end
+    end)
+    return tonumber(value) or 0
+end
+
+local function readConfig()
+    pcall(function()
+        local handle = file.Open(CONFIG_FILE, "r")
+        if not handle then return end
+        local body = handle:Read() or ""
+        handle:Close()
+        for line in body:gmatch("[^\r\n]+") do
+            local key, value = line:match("^([%w_]+)%s*=%s*(.-)%s*$")
+            if key then config[key] = value end
+        end
+    end)
+end
+
+local function cfgBool(key, default)
+    local value = config[key]
+    if value == nil then return default end
+    return value == "1" or value == "true"
+end
+
+local function cfgNumber(key, default, minimum, maximum)
+    local value = tonumber(config[key]) or default
+    if value < minimum then value = minimum elseif value > maximum then value = maximum end
+    return value
+end
+
+readConfig()
+
+local findFirstA, findNextA, findClose, getCurrentDirectoryA, getModuleFileNameA
+local createDirectoryA, winExec
+if type(f) == "table" then
+    pcall(function() f.cdef[[
+        typedef struct {
+            uint32_t attributes;
+            uint32_t creation_lo, creation_hi;
+            uint32_t access_lo, access_hi;
+            uint32_t write_lo, write_hi;
+            uint32_t size_hi, size_lo;
+            uint32_t reserved0, reserved1;
+            char filename[260];
+            char alternate[14];
+        } RGN_SOUND_FIND_DATA;
+    ]] end)
+    pcall(function() f.cdef[[
+        void* GetModuleHandleA(const char*);
+        void* GetProcAddress(void*, const char*);
+    ]] end)
+    pcall(function()
+        local kernel32 = f.C.GetModuleHandleA("kernel32.dll")
+        local function proc(name, ctype)
+            local address = kernel32 ~= nil and f.C.GetProcAddress(kernel32, name) or nil
+            return address ~= nil and f.cast(ctype, address) or nil
+        end
+        findFirstA = proc("FindFirstFileA", "void*(*)(const char*, void*)")
+        findNextA = proc("FindNextFileA", "int(*)(void*, void*)")
+        findClose = proc("FindClose", "int(*)(void*)")
+        getCurrentDirectoryA = proc("GetCurrentDirectoryA", "uint32_t(*)(uint32_t, char*)")
+        getModuleFileNameA = proc("GetModuleFileNameA", "uint32_t(*)(void*, char*, uint32_t)")
+        createDirectoryA = proc("CreateDirectoryA", "int(*)(const char*, void*)")
+        winExec = proc("WinExec", "uint32_t(*)(const char*, uint32_t)")
+    end)
+end
+
+local function deriveCsgoRoot(path)
+    if type(path) ~= "string" or path == "" then return nil end
+    local normalized = path:gsub("/", "\\")
+    local lower = normalized:lower()
+    if lower:sub(-5) == "\\csgo" then return normalized end
+    local executableSuffix = "\\bin\\win64\\cs2.exe"
+    if lower:sub(-#executableSuffix) == executableSuffix then
+        return normalized:sub(1, #normalized - #executableSuffix) .. "\\csgo"
+    end
+    local marker = "\\bin\\win64"
+    local position = lower:find(marker, 1, true)
+    if position then return normalized:sub(1, position - 1) .. "\\csgo" end
+    return nil
+end
+
+local function resolveSoundDirectory()
+    if not getCurrentDirectoryA or not getModuleFileNameA or type(f) ~= "table" then return nil end
+    local buffer = f.new("char[1024]")
+    local count = getCurrentDirectoryA(1024, buffer)
+    if count and count > 0 and count < 1024 then
+        local root = deriveCsgoRoot(f.string(buffer, count))
+        if root then return root .. "\\sounds" end
+    end
+    count = getModuleFileNameA(nil, buffer, 1024)
+    if count and count > 0 and count < 1024 then
+        local root = deriveCsgoRoot(f.string(buffer, count))
+        if root then return root .. "\\sounds" end
+    end
+    return nil
+end
+
+local function ensureSoundDirectory()
+    if not soundDir then soundDir = resolveSoundDirectory() end
+    if soundDir and createDirectoryA then pcall(createDirectoryA, soundDir, nil) end
+    return soundDir ~= nil
+end
+
+local function scanSounds()
+    local names, paths = {}, {}
+    if not ensureSoundDirectory() or not findFirstA or not findNextA or not findClose or type(f) ~= "table" then
+        return { "[ csgo\\sounds unavailable ]" }, paths
+    end
+    local data = f.new("RGN_SOUND_FIND_DATA")
+    local invalid = f.cast("void*", f.cast("intptr_t", -1))
+    local handle = findFirstA(soundDir .. "\\*.vsnd_c", data)
+    if handle ~= invalid then
+        repeat
+            local filename = f.string(data.filename)
+            local lower = filename:lower()
+            -- A scanned basename is later inserted into a console command.
+            -- Keep only ordinary filename characters and reject separators or
+            -- command delimiters even though Windows itself permits them.
+            if lower:sub(-7) == ".vsnd_c" and filename:match("^[%w%s%._%-]+$") then
+                paths[#paths + 1] = filename:sub(1, #filename - 7)
+            end
+        until findNextA(handle, data) == 0
+        findClose(handle)
+    end
+    table.sort(paths, function(a, b) return a:lower() < b:lower() end)
+    for i = 1, #paths do names[i] = paths[i] end
+    if #names == 0 then names[1] = "[ put .vsnd_c in csgo\\sounds ]" end
+    return names, paths
+end
+
+soundDir = resolveSoundDirectory()
+soundNames, soundPaths = scanSounds()
+
+local function soundIndex(saved)
+    saved = tostring(saved or "")
+    for i = 1, #soundPaths do if soundPaths[i] == saved then return i end end
+    return 1
+end
+
+local tab = M:Tab("CUSTOM SOUNDS")
+tab:Row()
+local hitSection = tab:Section("Hit sound")
+local hitEnabled = hitSection:Checkbox("Enable custom hit sound", cfgBool("hit_enabled", false))
+local hitCombo = hitSection:Combo("Sound", soundNames, soundIndex(config.hit_sound))
+hitComboWidget = hitSection.ws[#hitSection.ws]
+local hitVolume = hitSection:Slider("Volume", cfgNumber("hit_volume", 100, 0, 100), 0, 100, 1, "%.0f%%")
+
+tab:Col()
+local killSection = tab:Section("Kill sound")
+local killEnabled = killSection:Checkbox("Enable custom kill sound", cfgBool("kill_enabled", false))
+local killCombo = killSection:Combo("Sound", soundNames, soundIndex(config.kill_sound))
+killComboWidget = killSection.ws[#killSection.ws]
+local killVolume = killSection:Slider("Volume", cfgNumber("kill_volume", 100, 0, 100), 0, 100, 1, "%.0f%%")
+
+tab:Col()
+local librarySection = tab:Section("Sound library")
+
+local function selectedSound(combo)
+    return tostring(soundPaths[tonumber(combo:Get()) or 1] or "")
+end
+
+local function playSound(path, volume)
+    if path == "" then return false end
+    local amount = math.max(0, math.min(100, tonumber(volume) or 100)) / 100
+    if amount <= 0 then return false end
+    pcall(function() client.SetConVar("snd_toolvolume", amount, true) end)
+    local ok = pcall(function() client.Command("play sounds\\" .. path, true) end)
+    return ok
+end
+
+local function currentSnapshot()
+    return table.concat({
+        hitEnabled:Get() and "1" or "0", selectedSound(hitCombo), tostring(hitVolume:Get()),
+        killEnabled:Get() and "1" or "0", selectedSound(killCombo), tostring(killVolume:Get()),
+    }, "|")
+end
+
+local function saveConfig()
+    pcall(function()
+        local handle = file.Open(CONFIG_FILE, "w")
+        if not handle then return end
+        handle:Write(table.concat({
+            "hit_enabled=" .. (hitEnabled:Get() and "1" or "0"),
+            "hit_sound=" .. selectedSound(hitCombo),
+            "hit_volume=" .. tostring(hitVolume:Get()),
+            "kill_enabled=" .. (killEnabled:Get() and "1" or "0"),
+            "kill_sound=" .. selectedSound(killCombo),
+            "kill_volume=" .. tostring(killVolume:Get()),
+        }, "\n"))
+        handle:Close()
+    end)
+end
+
+local function refreshSounds()
+    local oldHit, oldKill = selectedSound(hitCombo), selectedSound(killCombo)
+    soundNames, soundPaths = scanSounds()
+    hitComboWidget.options, killComboWidget.options = soundNames, soundNames
+    hitCombo:Set(soundIndex(oldHit))
+    killCombo:Set(soundIndex(oldKill))
+    observedConfig = currentSnapshot()
+    saveConfig()
+    print(string.format("[rgnSounds] refreshed: %d .vsnd_c files in %s", #soundPaths, tostring(soundDir or "unresolved")))
+end
+
+librarySection:Button("Preview hit sound", function()
+    if not playSound(selectedSound(hitCombo), hitVolume:Get()) then print("[rgnSounds] select a valid hit sound") end
+end)
+librarySection:Button("Preview kill sound", function()
+    if not playSound(selectedSound(killCombo), killVolume:Get()) then print("[rgnSounds] select a valid kill sound") end
+end)
+librarySection:Button("Refresh csgo/sounds", refreshSounds)
+librarySection:Button("Open sounds folder", function()
+    if ensureSoundDirectory() and winExec then
+        pcall(function() winExec('explorer.exe "' .. soundDir .. '"', 5) end)
+    else
+        print("[rgnSounds] csgo/sounds could not be resolved")
+    end
+end)
+librarySection:Custom(44, function(ui)
+    ui.label("Detected: " .. tostring(#soundPaths) .. " compiled sounds", ui.T.text)
+    ui.label("Folder: csgo\\sounds (.vsnd_c)", ui.T.textdim)
+end)
+
+local function entityIndex(entity)
+    local value
+    if not entity then return nil end
+    pcall(function() value = tonumber(entity:GetIndex()) end)
+    return value and value > 0 and value or nil
+end
+
+local function controllerPawn(controller)
+    local pawn
+    if not controller then return nil end
+    pcall(function() pawn = controller:GetPropEntity("m_hPlayerPawn") end)
+    if not pawn then pcall(function() pawn = controller:GetFieldEntity("m_hPlayerPawn") end) end
+    return pawn
+end
+
+local function isLocalAttacker(slot)
+    slot = tonumber(slot)
+    if not slot or slot < 0 then return false end
+    local wantedController = (slot % 32768) + 1
+    local controllers
+    pcall(function() controllers = entities.FindByClass("CCSPlayerController") end)
+    if type(controllers) ~= "table" then return false end
+    local localPawn
+    pcall(function() localPawn = entities.GetLocalPlayer() end)
+    local localPawnIndex = entityIndex(localPawn)
+    for i = 1, #controllers do
+        local controller = controllers[i]
+        if entityIndex(controller) == wantedController then
+            local isLocal
+            pcall(function() isLocal = controller:GetFieldBool("m_bIsLocalPlayerController") end)
+            if isLocal == true then return true end
+            local pawnIndex = entityIndex(controllerPawn(controller))
+            return localPawnIndex ~= nil and pawnIndex == localPawnIndex
+        end
+    end
+    return false
+end
+
+M._customSoundsEventCallback = function(event)
+    if not hitEnabled:Get() and not killEnabled:Get() then return end
+    local name
+    pcall(function() name = event:GetName() end)
+    if name ~= "player_hurt" then return end
+    local attacker, victim, health, damage
+    pcall(function()
+        attacker = tonumber(event:GetInt("attacker"))
+        victim = tonumber(event:GetInt("userid"))
+        health = tonumber(event:GetInt("health"))
+        damage = tonumber(event:GetInt("dmg_health"))
+    end)
+    if not attacker or attacker < 0 or attacker == victim or not damage or damage <= 0 then return end
+    if not isLocalAttacker(attacker) then return end
+    if health and health <= 0 then
+        if killEnabled:Get() then playSound(selectedSound(killCombo), killVolume:Get()) end
+    elseif hitEnabled:Get() then
+        playSound(selectedSound(hitCombo), hitVolume:Get())
+    end
+end
+
+pcall(function() if client and type(client.AllowListener) == "function" then client.AllowListener("player_hurt") end end)
+observedConfig = currentSnapshot()
+M:OnFrame(function()
+    local now = clock()
+    if now >= nextListenerRefresh then
+        nextListenerRefresh = now + 2.0
+        pcall(function() if client and type(client.AllowListener) == "function" then client.AllowListener("player_hurt") end end)
+    end
+    if now < nextConfigPoll then return end
+    nextConfigPoll = now + 0.50
+    local snapshot = currentSnapshot()
+    if snapshot ~= observedConfig then observedConfig = snapshot; saveConfig() end
+end)
+
+callbacks.Register("Unload", function()
+    pcall(saveConfig)
+    M._customSoundsEventCallback = nil
+end)
+
+print(string.format("[rgnSounds] loaded | %d compiled sounds | folder=%s", #soundPaths, tostring(soundDir or "unresolved")))
+end)
+
 loadModule("KILLSAY", function()
 local M = M
 
@@ -7760,6 +8083,7 @@ local function requestKillsayListeners()
     pcall(function()
         if not client or type(client.AllowListener) ~= "function" then return end
         client.AllowListener("player_death")
+        client.AllowListener("player_hurt")
         client.AllowListener("player_chat")
         client.AllowListener("server_spawn")
         client.AllowListener("game_newmap")
@@ -8453,6 +8777,10 @@ registerEventBridge = function()
             if type(M._killsayEventCallback) == "function" then
                 local ok, err = pcall(M._killsayEventCallback, event)
                 if not ok then writeRuntime("callback error", { error = tostring(err) }) end
+            end
+            if type(M._customSoundsEventCallback) == "function" then
+                local ok, err = pcall(M._customSoundsEventCallback, event)
+                if not ok then print("[rgnSounds] event error: " .. tostring(err)) end
             end
         end)
     end)
@@ -9556,7 +9884,7 @@ print("[rgnVotes] built-in service loaded | always on | safe logic + local chat 
 end)
 
 do
-    local wanted = { "WEAPONS", "AGENTS", "SKINS CUSTOM", "VIEWMODEL", "MOVEMENT", "IDENTITY", "KILLSAY", "CONFIGS" }
+    local wanted = { "WEAPONS", "AGENTS", "SKINS CUSTOM", "VIEWMODEL", "CUSTOM SOUNDS", "MOVEMENT", "IDENTITY", "KILLSAY", "CONFIGS" }
     local byName, ordered = {}, {}
     for _, tab in ipairs(M._tabs) do byName[tab.name] = tab end
     for _, name in ipairs(wanted) do
@@ -9567,4 +9895,4 @@ do
 end
 
 M:Build({ w = 940, h = 560, autoH = false, resize = true })
-print("[rgnMultitool] ready: Weapons, Agents, Skins Custom, Viewmodel, Movement, Killsay and Configs")
+print("[rgnMultitool] ready: Weapons, Agents, Skins Custom, Viewmodel, Custom Sounds, Movement, Identity, Killsay and Configs")

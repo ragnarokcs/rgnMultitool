@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.0 - 2026-07-18
+
+### Custom hit and kill sounds
+
+- Added an opt-in **CUSTOM SOUNDS** module compatible with compiled `.vsnd_c` files in `game/csgo/sounds`.
+- Added independent hit/kill sound selection, volume controls, previews, folder opening and an explicit refresh button.
+- Reused the proven `player_hurt` event path from femboytap while sharing the existing Killsay event bridge, avoiding another native event callback.
+- Sound discovery runs only at Lua load or when Refresh is pressed; all controls are disabled by default and settings persist locally.
+
 ## 1.1.11 - 2026-07-18
 
 ### Correct vote slot association
