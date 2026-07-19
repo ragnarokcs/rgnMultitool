@@ -1,0 +1,18 @@
+rgnMultitool Custom Characters - Manual Installation
+=====================================================
+
+The Lua does not download or install this package automatically.
+
+1. Download every numbered RAR part into the same folder.
+2. Open only rgnMultitool-Custom-Characters-v1.part1.rar.
+3. Extract it into Counter-Strike 2's game\csgo folder.
+4. The final structure must begin with game\csgo\characters\models.
+5. Restart CS2, run rgnMultitool, and open SKINS CUSTOM.
+
+Do not extract each numbered part separately.
+Do not create game\csgo\characters\characters.
+
+Verify every part with SHA256SUMS.txt before extracting.
+
+Full documentation:
+https://github.com/ragnarokcs/rgnMultitool/blob/main/PACKAGES.md

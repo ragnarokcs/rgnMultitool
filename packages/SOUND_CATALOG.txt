@@ -1,0 +1,60 @@
+rgnMultitool Sound Catalog
+Compiled sounds: 57
+
+agpa1.vsnd_c
+agpa2.vsnd_c
+aimbooster.vsnd_c
+amongus_kill.vsnd_c
+applepay.vsnd_c
+arena_switch.vsnd_c
+bameware.vsnd_c
+bd.vsnd_c
+bell.vsnd_c
+ben.vsnd_c
+bonk.vsnd_c
+brotato.vsnd_c
+bubble.vsnd_c
+click.vsnd_c
+cod.vsnd_c
+combobreak.vsnd_c
+door.vsnd_c
+fatality.vsnd_c
+flush.vsnd_c
+grenade_hit1.vsnd_c
+headshot.vsnd_c
+hentai1.vsnd_c
+hentai2.vsnd_c
+hentai3.vsnd_c
+hitmarker.vsnd_c
+kick.vsnd_c
+kill_doof_01.vsnd_c
+killcard_1.vsnd_c
+minecraft_bow_ding.vsnd_c
+minecraft_button.vsnd_c
+minecraft_egg_throw.vsnd_c
+minecraft_hit.vsnd_c
+minecraft_xp_gain.vsnd_c
+money_claim.vsnd_c
+mouthsound.vsnd_c
+msfrs.vsnd_c
+na naxuy.vsnd_c
+phonk.vsnd_c
+pop.vsnd_c
+primordial.vsnd_c
+pubg_pan.vsnd_c
+quaver.vsnd_c
+regulus.vsnd_c
+rust_headshot.vsnd_c
+satisfying click.vsnd_c
+sparkle.vsnd_c
+spiral knight.vsnd_c
+stapler.vsnd_c
+stony.vsnd_c
+tavern_misc1c.vsnd_c
+telegram_notification.vsnd_c
+timer_bell.vsnd_c
+trident_pierce.vsnd_c
+warning.vsnd_c
+water_drop.vsnd_c
+xp_rankdown_02.vsnd_c
+zelda.vsnd_c
