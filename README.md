@@ -22,6 +22,13 @@ Source-visible Aimware Lua toolkit for CS2. Every module lives in one compact me
 - W/A/S/D null-bind resolver.
 - Movement features are opt-in and disabled by default.
 
+### Scope overlay
+
+- Optional Neverlose-inspired sniper overlay with pointed arms, a separated luminous center dot and configurable color.
+- Six supersampled fog/bloom layers are cached as one texture and rendered in one operation per frame.
+- Replaces Aimware's native full-screen NoScope lines while active and restores the user's original NoScope settings when disabled or unloaded.
+- Scope detection is cached at 20 Hz; the module is disabled by default.
+
 ### Identity and Killsay
 
 - Custom player name and clan prefix controls, independently enabled and saved.
@@ -31,6 +38,8 @@ Source-visible Aimware Lua toolkit for CS2. Every module lives in one compact me
 ### Custom sounds
 
 - Independent custom hit and kill sounds with volume controls and preview buttons.
+- Strict local-attacker resolution prevents hits and kills by teammates or opponents from playing sounds, including in Deathmatch.
+- Local respawns, team changes and controlled bots are resolved through the current pawn/controller identity cache.
 - Place compiled `.vsnd_c` files in `Counter-Strike Global Offensive/game/csgo/sounds` or its subfolders, then press **Refresh csgo/sounds**.
 - Sound scanning occurs only at Lua startup or on manual refresh; both effects are disabled by default.
 - The Lua never downloads or installs asset packs automatically. See [Manual asset packages](PACKAGES.md) for the optional sound and custom-character downloads.

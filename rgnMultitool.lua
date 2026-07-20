@@ -1,6 +1,6 @@
--- rgnMultitool v1.2.3: portable custom sounds and reload-safe event bridge.
+-- rgnMultitool v1.3.0: polished scope overlay and strict-local custom sounds.
 -- Keeps the proven per-file configuration/cache layout from v1.1.0.
-local RGN_MULTITOOL_VERSION = "1.2.3"
+local RGN_MULTITOOL_VERSION = "1.3.0"
 local RGN_MULTITOOL_SIGNATURE = "RGN_MULTITOOL_SOURCE_V1"
 _G.RGN_MULTITOOL_VERSION = RGN_MULTITOOL_VERSION
 pcall(function()
@@ -2126,6 +2126,18 @@ function M:Build(opts)
                     end
                 end
             end
+            if type(self._scopeDrawCallback) == "function" then
+                local ok, err = pcall(self._scopeDrawCallback)
+                if ok then
+                    self._scopeDrawError = nil
+                else
+                    local message = tostring(err)
+                    if self._scopeDrawError ~= message then
+                        self._scopeDrawError = message
+                        print("[rgnScope] main Draw hook error: " .. message)
+                    end
+                end
+            end
         end
 
         if not open and self._t < 0.005 and #self._toasts == 0 then
@@ -3484,6 +3496,444 @@ pcall(function()
 end)
 
 print("[rgnMultitool] viewmodel loaded: XYZ + optional left-hand knife | opt-in extended hook")
+end)
+
+loadModule("SCOPE OVERLAY", function()
+local M = M
+local CONFIG_FILE = "rgnscope_config.txt"
+-- Aimware exposes the two native scope layers separately:
+--   world.noscope        -> removes the game's scope presentation
+--   world.noscopeoverlay -> draws Aimware's full-screen replacement cross lines
+-- Our custom overlay needs the first enabled and the second disabled.
+local NO_SCOPE_KEY = "world.noscope"
+local NATIVE_OVERLAY_KEY = "world.noscopeoverlay"
+local config = {}
+
+local timeSource
+if common and type(common.Time) == "function" then timeSource = common.Time
+elseif globals and type(globals.RealTime) == "function" then timeSource = globals.RealTime
+elseif globals and type(globals.CurTime) == "function" then timeSource = globals.CurTime end
+local function clock()
+    if not timeSource then return 0 end
+    return tonumber(timeSource()) or 0
+end
+
+local function clampValue(value, minimum, maximum)
+    value = tonumber(value) or minimum
+    if value < minimum then return minimum end
+    if value > maximum then return maximum end
+    return value
+end
+
+local function readConfig()
+    pcall(function()
+        local handle = file.Open(CONFIG_FILE, "r")
+        if not handle then return end
+        local body = handle:Read() or ""
+        handle:Close()
+        for line in body:gmatch("[^\r\n]+") do
+            local key, value = line:match("^([%w_]+)%s*=%s*(.-)%s*$")
+            if key then config[key] = value end
+        end
+    end)
+end
+
+local function cfgBool(key, default)
+    local value = config[key]
+    if value == nil then return default end
+    return value == "1" or value == "true"
+end
+
+local function cfgColor(key, default)
+    local value, result = tostring(config[key] or ""), {}
+    for number in value:gmatch("%d+") do result[#result + 1] = clampValue(number, 0, 255) end
+    if #result < 3 then return { default[1], default[2], default[3], default[4] or 255 } end
+    return { result[1], result[2], result[3], result[4] or 255 }
+end
+
+readConfig()
+
+local tab = M:Tab("SCOPE OVERLAY")
+tab:Row()
+local mainSection = tab:Section("Custom sniper scope")
+local enabled = mainSection:Checkbox("Enable scope overlay", cfgBool("enabled", false))
+local replaceOriginal = mainSection:Checkbox("Replace original scope", cfgBool("replace", true))
+
+tab:Col()
+local appearanceSection = tab:Section("Appearance")
+local scopeColor = appearanceSection:ColorPicker("Overlay color", cfgColor("color", { 255, 205, 160, 255 }))
+
+tab:Col()
+local scopeState, removalState = "disabled", "original scope unchanged"
+local statusSection = tab:Section("Status")
+statusSection:Custom(62, function(ui)
+    ui.label("Overlay: " .. scopeState, ui.T.text)
+    ui.label("Default: " .. removalState, ui.T.textdim)
+end)
+
+local function colorValue()
+    local value = scopeColor:Get()
+    if type(value) ~= "table" then return { 255, 205, 160, 255 } end
+    return {
+        clampValue(value[1], 0, 255), clampValue(value[2], 0, 255),
+        clampValue(value[3], 0, 255), clampValue(value[4] or 255, 0, 255),
+    }
+end
+
+local function snapshot()
+    local color = colorValue()
+    return table.concat({
+        enabled:Get() and "1" or "0", replaceOriginal:Get() and "1" or "0",
+        table.concat(color, ","),
+    }, "|")
+end
+
+local function saveConfig()
+    local color = colorValue()
+    pcall(function()
+        local handle = file.Open(CONFIG_FILE, "w")
+        if not handle then return end
+        handle:Write(table.concat({
+            "enabled=" .. (enabled:Get() and "1" or "0"),
+            "replace=" .. (replaceOriginal:Get() and "1" or "0"),
+            "color=" .. table.concat(color, ","),
+        }, "\n"))
+        handle:Close()
+    end)
+end
+
+local originalNoScope, originalNativeOverlay, ownsRemoval = nil, nil, false
+local lastRemovalEnforce = 0
+local function getGuiValue(key)
+    local value, ok
+    ok = pcall(function() value = gui.GetValue(key) end)
+    if not ok then return nil end
+    return value
+end
+
+local function setGuiValue(key, value)
+    return pcall(function() gui.SetValue(key, value) end)
+end
+
+local function restoreRemoval()
+    if not ownsRemoval then return end
+    if originalNoScope ~= nil then pcall(setGuiValue, NO_SCOPE_KEY, originalNoScope) end
+    if originalNativeOverlay ~= nil then pcall(setGuiValue, NATIVE_OVERLAY_KEY, originalNativeOverlay) end
+    ownsRemoval, originalNoScope, originalNativeOverlay = false, nil, nil
+    removalState = "original scope restored"
+end
+
+local function syncRemoval(wanted)
+    if wanted == nil then wanted = enabled:Get() and replaceOriginal:Get() end
+    if wanted and not ownsRemoval then
+        local currentNoScope = getGuiValue(NO_SCOPE_KEY)
+        local currentNativeOverlay = getGuiValue(NATIVE_OVERLAY_KEY)
+        if currentNoScope == nil and currentNativeOverlay == nil then
+            removalState = "Aimware removal unavailable; overlay only"
+            return
+        end
+        originalNoScope = currentNoScope
+        originalNativeOverlay = currentNativeOverlay
+        local scopeOK = currentNoScope == nil or setGuiValue(NO_SCOPE_KEY, true)
+        local overlayOK = currentNativeOverlay == nil or setGuiValue(NATIVE_OVERLAY_KEY, false)
+        if scopeOK and overlayOK then
+            ownsRemoval = true
+            lastRemovalEnforce = clock()
+            removalState = "native scope + cross lines hidden"
+        else
+            if originalNoScope ~= nil then pcall(setGuiValue, NO_SCOPE_KEY, originalNoScope) end
+            if originalNativeOverlay ~= nil then pcall(setGuiValue, NATIVE_OVERLAY_KEY, originalNativeOverlay) end
+            originalNoScope, originalNativeOverlay = nil, nil
+            removalState = "Aimware removal refused; overlay only"
+        end
+    elseif wanted and ownsRemoval then
+        -- Config/map changes can restore Aimware's overlay. Reassert at a low
+        -- frequency so the native full-screen lines stay off without frame cost.
+        local now = clock()
+        if now - lastRemovalEnforce >= 0.50 then
+            lastRemovalEnforce = now
+            if originalNoScope ~= nil and getGuiValue(NO_SCOPE_KEY) ~= true then
+                setGuiValue(NO_SCOPE_KEY, true)
+            end
+            if originalNativeOverlay ~= nil and getGuiValue(NATIVE_OVERLAY_KEY) ~= false then
+                setGuiValue(NATIVE_OVERLAY_KEY, false)
+            end
+        end
+        removalState = "native scope + cross lines hidden"
+    elseif not wanted and ownsRemoval then
+        restoreRemoval()
+    elseif not wanted then
+        removalState = "original scope unchanged"
+    end
+end
+
+local SNIPER_IDS = { [9] = true, [11] = true, [38] = true, [40] = true }
+
+local function applyGlowColor(color, alpha, whiteMix)
+    whiteMix = whiteMix or 0
+    draw.Color(
+        math.floor(color[1] + (255 - color[1]) * whiteMix + 0.5),
+        math.floor(color[2] + (255 - color[2]) * whiteMix + 0.5),
+        math.floor(color[3] + (255 - color[3]) * whiteMix + 0.5),
+        math.floor(color[4] * alpha + 0.5)
+    )
+end
+
+local function fourTaperedSegments(cx, cy, inner, outer, halfWidth)
+    -- Each arm is one triangle: its broad end faces the center gap and its
+    -- outer end converges to a single pixel instead of a square cap.
+    draw.Triangle(cx - inner, cy - halfWidth, cx - inner, cy + halfWidth, cx - outer, cy)
+    draw.Triangle(cx + inner, cy - halfWidth, cx + inner, cy + halfWidth, cx + outer, cy)
+    draw.Triangle(cx - halfWidth, cy - inner, cx + halfWidth, cy - inner, cx, cy - outer)
+    draw.Triangle(cx - halfWidth, cy + inner, cx + halfWidth, cy + inner, cx, cy + outer)
+end
+
+local function drawNeverloseGlow(cx, cy, color, alpha)
+    -- Fixed Neverlose-inspired geometry: short separated arms, a very thin
+    -- luminous core and two soft halo layers. The center dot uses the same
+    -- three-pass treatment and also covers the regular game crosshair dot.
+    applyGlowColor(color, alpha * 0.075, 0.00)
+    fourTaperedSegments(cx, cy, 10, 122, 5)
+    draw.FilledCircle(cx, cy, 5)
+
+    applyGlowColor(color, alpha * 0.20, 0.22)
+    fourTaperedSegments(cx, cy, 12, 118, 3)
+    draw.FilledCircle(cx, cy, 3)
+
+    applyGlowColor(color, alpha * 0.88, 0.76)
+    fourTaperedSegments(cx, cy, 15, 112, 1)
+    draw.FilledCircle(cx, cy, 2)
+end
+
+local renderConfig = {}
+local function refreshRenderConfig()
+    renderConfig.enabled = enabled:Get() == true
+    renderConfig.replace = replaceOriginal:Get() == true
+    renderConfig.color = colorValue()
+end
+refreshRenderConfig()
+
+-- Render the polished scope once as a supersampled SVG texture. This gives
+-- the tapered core true sub-pixel antialiasing and lets us stack several
+-- translucent bloom/fog layers without paying for them every frame.
+local TEXTURE_SIZE, TEXTURE_HALF = 300, 150
+local scopeTexture, builtTextureKey = nil, nil
+local requestedTextureKey, requestedTextureColor = nil, nil
+local textureDirtyAt, nextTextureRetry = 0, 0
+
+local function colorKey(color)
+    return table.concat({ color[1], color[2], color[3], color[4] }, ",")
+end
+
+local function mixedRGB(color, whiteMix)
+    local function channel(value)
+        return math.floor(value + (255 - value) * whiteMix + 0.5)
+    end
+    return string.format("rgb(%d,%d,%d)", channel(color[1]), channel(color[2]), channel(color[3]))
+end
+
+local function taperedArmsPath(halfWidth, tipLength)
+    local c, inner, outer = TEXTURE_HALF, 17, 112
+    local leftInner, leftTip = c - inner, c - outer
+    local rightInner, rightTip = c + inner, c + outer
+    local topInner, topTip = c - inner, c - outer
+    local bottomInner, bottomTip = c + inner, c + outer
+    local leftBase, rightBase = leftTip + tipLength, rightTip - tipLength
+    local topBase, bottomBase = topTip + tipLength, bottomTip - tipLength
+    return table.concat({
+        string.format("M %.2f %.2f L %.2f %.2f L %.2f %.2f L %.2f %.2f L %.2f %.2f Z",
+            leftInner, c - halfWidth, leftBase, c - halfWidth, leftTip, c,
+            leftBase, c + halfWidth, leftInner, c + halfWidth),
+        string.format("M %.2f %.2f L %.2f %.2f L %.2f %.2f L %.2f %.2f L %.2f %.2f Z",
+            rightInner, c - halfWidth, rightBase, c - halfWidth, rightTip, c,
+            rightBase, c + halfWidth, rightInner, c + halfWidth),
+        string.format("M %.2f %.2f L %.2f %.2f L %.2f %.2f L %.2f %.2f L %.2f %.2f Z",
+            c - halfWidth, topInner, c - halfWidth, topBase, c, topTip,
+            c + halfWidth, topBase, c + halfWidth, topInner),
+        string.format("M %.2f %.2f L %.2f %.2f L %.2f %.2f L %.2f %.2f L %.2f %.2f Z",
+            c - halfWidth, bottomInner, c - halfWidth, bottomBase, c, bottomTip,
+            c + halfWidth, bottomBase, c + halfWidth, bottomInner),
+    }, " ")
+end
+
+local function buildScopeSVG(color)
+    local alphaScale = (tonumber(color[4]) or 255) / 255
+    local layers = {
+        { 16.0, 24, 0.010, 0.00, 14.0 },
+        { 11.0, 21, 0.018, 0.02, 10.0 },
+        {  7.0, 18, 0.032, 0.06,  7.0 },
+        {  4.0, 15, 0.065, 0.14,  4.5 },
+        {  2.1, 12, 0.160, 0.32,  2.8 },
+        {  0.65, 9, 0.940, 0.78,  1.55 },
+    }
+    local parts = {
+        string.format('<svg xmlns="http://www.w3.org/2000/svg" width="%d" height="%d" viewBox="0 0 %d %d" shape-rendering="geometricPrecision">',
+            TEXTURE_SIZE, TEXTURE_SIZE, TEXTURE_SIZE, TEXTURE_SIZE),
+    }
+    for i = 1, #layers do
+        local layer = layers[i]
+        local opacity = layer[3] * alphaScale
+        parts[#parts + 1] = string.format('<path d="%s" fill="%s" fill-opacity="%.5f"/>',
+            taperedArmsPath(layer[1], layer[2]), mixedRGB(color, layer[4]), opacity)
+        parts[#parts + 1] = string.format('<circle cx="%d" cy="%d" r="%.2f" fill="%s" fill-opacity="%.5f"/>',
+            TEXTURE_HALF, TEXTURE_HALF, layer[5], mixedRGB(color, layer[4]), opacity)
+    end
+    parts[#parts + 1] = "</svg>"
+    return table.concat(parts)
+end
+
+local function rebuildScopeTexture(color, now)
+    now = now or clock()
+    if not common or type(common.RasterizeSVG) ~= "function" or
+       not draw or type(draw.CreateTexture) ~= "function" then
+        nextTextureRetry = now + 2.0
+        return false
+    end
+    local key = colorKey(color)
+    local ok, rgba, width, height = pcall(common.RasterizeSVG, buildScopeSVG(color), 2)
+    if not ok or type(rgba) ~= "string" or not width or not height then
+        nextTextureRetry = now + 2.0
+        return false
+    end
+    if scopeTexture and type(draw.UpdateTexture) == "function" then
+        local updateOK = pcall(draw.UpdateTexture, scopeTexture, rgba)
+        if updateOK then
+            builtTextureKey, textureDirtyAt = key, 0
+            return true
+        end
+    end
+    local createOK, texture = pcall(draw.CreateTexture, rgba, width, height)
+    if createOK and texture then
+        scopeTexture, builtTextureKey, textureDirtyAt = texture, key, 0
+        return true
+    end
+    nextTextureRetry = now + 2.0
+    return false
+end
+
+local function requestScopeTexture(color, now, immediate)
+    local key = colorKey(color)
+    if key ~= requestedTextureKey then
+        requestedTextureKey = key
+        requestedTextureColor = { color[1], color[2], color[3], color[4] }
+        textureDirtyAt = immediate and now or (now + 0.12)
+    end
+end
+
+requestScopeTexture(renderConfig.color, clock(), true)
+rebuildScopeTexture(requestedTextureColor, clock())
+
+local scopedReaders = {
+    function(player) return player:GetFieldBool("m_bIsScoped") end,
+    function(player) return player:GetPropBool("m_bIsScoped") end,
+    function(player) return player:GetFieldInt("m_bIsScoped") end,
+    function(player) return player:GetPropInt("m_bIsScoped") end,
+}
+local selectedScopedReader = nil
+local function readScopedFast(player)
+    if selectedScopedReader then
+        local ok, value = pcall(selectedScopedReader, player)
+        if ok and value ~= nil then return value == true or tonumber(value) == 1 end
+        selectedScopedReader = nil
+    end
+    for i = 1, #scopedReaders do
+        local reader = scopedReaders[i]
+        local ok, value = pcall(reader, player)
+        if ok and value ~= nil then
+            selectedScopedReader = reader
+            return value == true or tonumber(value) == 1
+        end
+    end
+    return false
+end
+
+local function scopedSniperFast()
+    local ok, player = pcall(entities.GetLocalPlayer)
+    if not ok or not player then return false, "waiting for player" end
+    local aliveOK, alive = pcall(function() return player:IsAlive() end)
+    if not aliveOK or alive ~= true then return false, "waiting for spawn" end
+    local idOK, weaponID = pcall(function() return tonumber(player:GetWeaponID()) end)
+    if not idOK or not SNIPER_IDS[weaponID] then return false, "sniper inactive" end
+    if not readScopedFast(player) then return false, "not scoped" end
+    return true, "active"
+end
+
+local fade, lastDrawAt = 0, clock()
+local scopeVisible = false
+local nextStatePoll, nextRemovalPoll, nextScreenPoll = 0, 0, 0
+local screenWidth, screenHeight = 0, 0
+M._scopeDrawCallback = function()
+    local now = clock()
+    local dt = clampValue(now - lastDrawAt, 0, 0.10)
+    lastDrawAt = now
+
+    -- Entity/property access is substantially more expensive than drawing.
+    -- Twenty checks per second are instant to the eye while avoiding hundreds
+    -- of entity calls per second on high-refresh-rate systems.
+    if now >= nextStatePoll then
+        nextStatePoll = now + 0.05
+        if renderConfig.enabled then
+            scopeVisible, scopeState = scopedSniperFast()
+        else
+            scopeVisible, scopeState = false, "disabled"
+        end
+    end
+    if now >= nextRemovalPoll then
+        nextRemovalPoll = now + 0.50
+        syncRemoval(renderConfig.enabled and renderConfig.replace)
+    end
+
+    local target = scopeVisible and 1 or 0
+    fade = fade + (target - fade) * math.min(1, dt * 16)
+    if fade < 0.01 or M._open then return end
+
+    if now >= nextScreenPoll or screenWidth <= 0 or screenHeight <= 0 then
+        nextScreenPoll = now + 2.0
+        pcall(function() screenWidth, screenHeight = draw.GetScreenSize() end)
+    end
+    if not screenWidth or not screenHeight or screenWidth <= 0 or screenHeight <= 0 then return end
+    local cx, cy = math.floor(screenWidth / 2), math.floor(screenHeight / 2)
+    if textureDirtyAt > 0 and now >= textureDirtyAt and now >= nextTextureRetry then
+        rebuildScopeTexture(requestedTextureColor or renderConfig.color, now)
+    end
+    if scopeTexture and type(draw.SetTexture) == "function" then
+        draw.Color(255, 255, 255, math.floor(255 * fade + 0.5))
+        draw.SetTexture(scopeTexture)
+        draw.FilledRect(cx - TEXTURE_HALF, cy - TEXTURE_HALF,
+            cx + TEXTURE_HALF, cy + TEXTURE_HALF)
+        pcall(draw.SetTexture, nil)
+    else
+        drawNeverloseGlow(cx, cy, renderConfig.color, fade)
+    end
+end
+
+local observed, dirtyAt = snapshot(), nil
+M:OnFrame(function()
+    refreshRenderConfig()
+    syncRemoval(renderConfig.enabled and renderConfig.replace)
+    local current = snapshot()
+    local now = clock()
+    requestScopeTexture(renderConfig.color, now, false)
+    if textureDirtyAt > 0 and now >= textureDirtyAt and now >= nextTextureRetry then
+        rebuildScopeTexture(requestedTextureColor or renderConfig.color, now)
+    end
+    if current ~= observed then observed, dirtyAt = current, now + 0.50 end
+    if dirtyAt and now >= dirtyAt then saveConfig(); dirtyAt = nil end
+end)
+syncRemoval()
+
+pcall(function()
+    callbacks.Register("Unload", "rgnMultitool_ScopeUnload", function()
+        pcall(saveConfig)
+        pcall(restoreRemoval)
+        pcall(draw.SetTexture, nil)
+        scopeTexture = nil
+        M._scopeDrawCallback = nil
+        pcall(callbacks.Unregister, "Unload", "rgnMultitool_ScopeUnload")
+    end)
+end)
+
+print("[rgnScope] loaded | supersampled Neverlose glow texture | color configurable")
 end)
 
 loadModule("WEAPONS", function()
@@ -7736,58 +8186,86 @@ local function controllerPawn(controller)
     return pawn
 end
 
-local function isLocalAttacker(rawAttacker, attackerPawnHandle)
-    rawAttacker = tonumber(rawAttacker)
-    local attackerPawnIndex = pawnHandleIndex(attackerPawnHandle)
-    local attackerEntry = pawnHandleIndex(rawAttacker)
-    local localPawn, localPawnIndex, localClientIndex
+-- Strict local identity cache. User IDs, controller indices and pawn handles
+-- live in different namespaces; treating them as interchangeable caused
+-- accidental matches with unrelated players (especially in Deathmatch).
+local localIdentity = {
+    updatedAt = -100,
+    pawnIndices = {},
+    playerIndices = {},
+    userIDs = {},
+}
+
+local function addPlayerInfo(identity, index)
+    index = tonumber(index)
+    if not index or index <= 0 then return end
+    identity.playerIndices[index] = true
+    local info
+    pcall(function() info = client.GetPlayerInfo(index) end)
+    if type(info) ~= "table" then return end
+    local userID = tonumber(info.UserID or info.userID or info.userid)
+    if userID and userID > 0 then identity.userIDs[userID] = true end
+end
+
+local function refreshLocalIdentity(force)
+    local now = clock()
+    if not force and now - localIdentity.updatedAt < 0.25 then return localIdentity end
+    localIdentity.updatedAt = now
+    localIdentity.pawnIndices = {}
+    localIdentity.playerIndices = {}
+    localIdentity.userIDs = {}
+
+    local localPawn
     pcall(function() localPawn = entities.GetLocalPlayer() end)
-    localPawnIndex = entityIndex(localPawn)
-    pcall(function() localClientIndex = tonumber(client.GetLocalPlayerIndex()) end)
-
-    if attackerPawnIndex and (
-        attackerPawnIndex == localPawnIndex or attackerPawnIndex == localClientIndex
-    ) then return true end
-
-    local attackerPlayerIndex
-    if rawAttacker and rawAttacker > 0 then
-        pcall(function() attackerPlayerIndex = tonumber(client.GetPlayerIndexByUserID(rawAttacker)) end)
+    local localPawnIndex = entityIndex(localPawn)
+    if localPawnIndex then
+        localIdentity.pawnIndices[localPawnIndex] = true
+        addPlayerInfo(localIdentity, localPawnIndex)
     end
-    if attackerPlayerIndex and localClientIndex and attackerPlayerIndex == localClientIndex then return true end
-    if rawAttacker and (
-        rawAttacker == localPawnIndex or rawAttacker == localClientIndex
-        or attackerEntry == localPawnIndex or attackerEntry == localClientIndex
-    ) then return true end
+
+    local localClientIndex
+    pcall(function() localClientIndex = tonumber(client.GetLocalPlayerIndex()) end)
+    addPlayerInfo(localIdentity, localClientIndex)
 
     local controllers
     pcall(function() controllers = entities.FindByClass("CCSPlayerController") end)
-    if type(controllers) ~= "table" then return false end
-    for i = 1, #controllers do
-        local controller = controllers[i]
-        local controllerIndex = entityIndex(controller)
-        local controllerIsLocal
-        pcall(function() controllerIsLocal = controller:GetFieldBool("m_bIsLocalPlayerController") end)
-        local pawnIndex = entityIndex(controllerPawn(controller))
-        if controllerIsLocal == true or (localPawnIndex and pawnIndex == localPawnIndex) then
-            if attackerPawnIndex and pawnIndex and attackerPawnIndex == pawnIndex then return true end
-            if rawAttacker and (
-                rawAttacker == controllerIndex or rawAttacker + 1 == controllerIndex
-                or attackerEntry == controllerIndex or rawAttacker == pawnIndex
-                or attackerEntry == pawnIndex
-            ) then return true end
-            if localClientIndex and controllerIndex == localClientIndex and attackerPlayerIndex == localClientIndex then
-                return true
+    if type(controllers) == "table" then
+        for i = 1, #controllers do
+            local controller = controllers[i]
+            local controllerIndex = entityIndex(controller)
+            local controllerIsLocal
+            pcall(function() controllerIsLocal = controller:GetFieldBool("m_bIsLocalPlayerController") end)
+            if controllerIsLocal == nil then
+                pcall(function() controllerIsLocal = controller:GetPropBool("m_bIsLocalPlayerController") end)
+            end
+            local pawnIndex = entityIndex(controllerPawn(controller))
+            if controllerIsLocal == true or
+               (localPawnIndex and pawnIndex and pawnIndex == localPawnIndex) then
+                if pawnIndex then localIdentity.pawnIndices[pawnIndex] = true end
+                addPlayerInfo(localIdentity, controllerIndex)
+                if pawnIndex then addPlayerInfo(localIdentity, pawnIndex) end
             end
         end
     end
+    return localIdentity
+end
 
-    if rawAttacker and localClientIndex then
-        local info, localUserID
-        pcall(function() info = client.GetPlayerInfo(localClientIndex) end)
-        pcall(function() localUserID = tonumber(info.UserID or info.userID or info.userid) end)
-        if localUserID and rawAttacker == localUserID then return true end
+local function isLocalActor(rawUserID, pawnHandle)
+    local identity = refreshLocalIdentity(false)
+    local pawnIndex = pawnHandleIndex(pawnHandle)
+    if pawnIndex then
+        -- A supplied pawn is authoritative. Never fall back to a coincidental
+        -- userid/entity-index match when it belongs to somebody else.
+        return identity.pawnIndices[pawnIndex] == true
     end
-    return false
+
+    rawUserID = tonumber(rawUserID)
+    if not rawUserID or rawUserID <= 0 then return false end
+    if identity.userIDs[rawUserID] == true then return true end
+
+    local mappedIndex
+    pcall(function() mappedIndex = tonumber(client.GetPlayerIndexByUserID(rawUserID)) end)
+    return mappedIndex ~= nil and identity.playerIndices[mappedIndex] == true
 end
 
 local lastKillSignature, lastKillAt = nil, -100
@@ -7823,7 +8301,8 @@ M._customSoundsEventCallback = function(event)
     local attackerPawnIndex, victimPawnIndex = pawnHandleIndex(attackerPawn), pawnHandleIndex(victimPawn)
     if attacker and victim and attacker == victim then return end
     if attackerPawnIndex and victimPawnIndex and attackerPawnIndex == victimPawnIndex then return end
-    if not isLocalAttacker(attacker, attackerPawn) then return end
+    if not isLocalActor(attacker, attackerPawn) then return end
+    if isLocalActor(victim, victimPawn) then return end
 
     local signature = killSignature(attacker, victim, attackerPawn, victimPawn)
     if name == "player_death" then
@@ -7867,7 +8346,7 @@ callbacks.Register("Unload", function()
     M._customSoundsEventCallback = nil
 end)
 
-print(string.format("[rgnSounds] loaded | %d compiled sounds | folder=%s", #soundPaths, tostring(soundDir or "unresolved")))
+print(string.format("[rgnSounds] loaded | strict-local events | %d compiled sounds | folder=%s", #soundPaths, tostring(soundDir or "unresolved")))
 end)
 
 loadModule("KILLSAY", function()
@@ -10180,7 +10659,7 @@ do
 end
 
 do
-    local wanted = { "WEAPONS", "AGENTS", "SKINS CUSTOM", "VIEWMODEL", "CUSTOM SOUNDS", "MOVEMENT", "IDENTITY", "KILLSAY", "CONFIGS" }
+    local wanted = { "WEAPONS", "AGENTS", "SKINS CUSTOM", "VIEWMODEL", "SCOPE OVERLAY", "CUSTOM SOUNDS", "MOVEMENT", "IDENTITY", "KILLSAY", "CONFIGS" }
     local byName, ordered = {}, {}
     for _, tab in ipairs(M._tabs) do byName[tab.name] = tab end
     for _, name in ipairs(wanted) do
@@ -10191,4 +10670,4 @@ do
 end
 
 M:Build({ w = 940, h = 560, autoH = false, resize = true })
-print("[rgnMultitool] ready: Weapons, Agents, Skins Custom, Viewmodel, Custom Sounds, Movement, Identity, Killsay and Configs")
+print("[rgnMultitool] ready: Weapons, Agents, Skins Custom, Viewmodel, Scope Overlay, Custom Sounds, Movement, Identity, Killsay and Configs")
