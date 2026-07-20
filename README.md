@@ -31,7 +31,7 @@ Source-visible Aimware Lua toolkit for CS2. Every module lives in one compact me
 ### Custom sounds
 
 - Independent custom hit and kill sounds with volume controls and preview buttons.
-- Place compiled `.vsnd_c` files directly in `Counter-Strike Global Offensive/game/csgo/sounds`, then press **Refresh csgo/sounds**.
+- Place compiled `.vsnd_c` files in `Counter-Strike Global Offensive/game/csgo/sounds` or its subfolders, then press **Refresh csgo/sounds**.
 - Sound scanning occurs only at Lua startup or on manual refresh; both effects are disabled by default.
 - The Lua never downloads or installs asset packs automatically. See [Manual asset packages](PACKAGES.md) for the optional sound and custom-character downloads.
 

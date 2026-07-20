@@ -4,13 +4,14 @@ rgnMultitool Sound Pack - Manual Installation
 The Lua does not download or install this package automatically.
 
 1. Extract this archive into Counter-Strike 2's game\csgo folder.
-2. The final files must be directly inside game\csgo\sounds.
+2. The final files may be directly inside game\csgo\sounds or organized in subfolders below it.
 3. Run rgnMultitool.
 4. Open CUSTOM SOUNDS and press Refresh csgo/sounds.
 5. Preview the selected hit and kill sounds before enabling them.
 
 Expected example:
 game\csgo\sounds\hitmarker.vsnd_c
+game\csgo\sounds\my_pack\custom_hit.vsnd_c
 
 Do not create game\csgo\sounds\sounds.
 
