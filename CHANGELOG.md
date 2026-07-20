@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.3.0 - 2026-07-19
+
+### Polished scope overlay and strict-local custom sounds
+
+- Added an opt-in **SCOPE OVERLAY** module with a fixed Neverlose-inspired design, pointed arms, separated center, luminous center dot and user-selectable color.
+- Rasterizes six bloom/fog layers as one supersampled SVG texture, rebuilding only when the color changes and drawing the complete overlay in one textured operation per frame.
+- Temporarily enables Aimware NoScope and disables its native full-screen NoScope Overlay lines while replacement is active, then restores both original settings on disable or unload.
+- Polls sniper and scoped state at 20 Hz and caches screen geometry so the overlay remains responsive without unnecessary per-frame entity work.
+- Replaced ambiguous Custom Sounds userid/entity-index comparisons with a strict local pawn, controller and UserID identity cache.
+- Prevents hits and kills by teammates or opponents from playing local sounds in Deathmatch and other modes while preserving local respawns, team changes and controlled bots.
+
 ## 1.2.3 - 2026-07-19
 
 ### Portable custom sounds and reload-safe events
