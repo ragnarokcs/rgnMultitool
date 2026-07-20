@@ -1,6 +1,6 @@
--- rgnMultitool v1.2.2: safe event bridge and halftime team-swap crash fix.
+-- rgnMultitool v1.2.3: portable custom sounds and reload-safe event bridge.
 -- Keeps the proven per-file configuration/cache layout from v1.1.0.
-local RGN_MULTITOOL_VERSION = "1.2.2"
+local RGN_MULTITOOL_VERSION = "1.2.3"
 local RGN_MULTITOOL_SIGNATURE = "RGN_MULTITOOL_SOURCE_V1"
 _G.RGN_MULTITOOL_VERSION = RGN_MULTITOOL_VERSION
 pcall(function()
@@ -7451,8 +7451,8 @@ loadModule("CUSTOM SOUNDS", function()
 local M = M
 
 -- Compatible with femboytap's sound pack: place compiled .vsnd_c files in
--- game/csgo/sounds. Discovery happens once at load and only when Refresh is
--- pressed; no directory scan runs during gameplay.
+-- game/csgo/sounds or one of its subfolders. Discovery happens once at load
+-- and only when Refresh is pressed; no directory scan runs during gameplay.
 local CONFIG_FILE = "rgncustomsounds_config.txt"
 local f = rawget(_G, "ffi")
 local config = {}
@@ -7569,27 +7569,50 @@ local function ensureSoundDirectory()
     return soundDir ~= nil
 end
 
+local function hasFileAttribute(value, flag)
+    value = tonumber(value) or 0
+    return value % (flag * 2) >= flag
+end
+
+local function safeRelativeSoundPath(path)
+    if type(path) ~= "string" or path == "" then return false end
+    if path:find('[";\r\n]') or path:find(":", 1, true) then return false end
+    for part in path:gmatch("[^\\]+") do
+        if part == "" or part == "." or part == ".." then return false end
+    end
+    return true
+end
+
+local function scanSoundDirectory(absoluteDir, relativeDir, paths, depth)
+    if depth > 6 then return end
+    local data = f.new("RGN_SOUND_FIND_DATA")
+    local invalid = f.cast("void*", f.cast("intptr_t", -1))
+    local handle = findFirstA(absoluteDir .. "\\*", data)
+    if handle == nil or handle == invalid then return end
+    repeat
+        local filename = f.string(data.filename)
+        if filename ~= "." and filename ~= ".." then
+            local relative = relativeDir == "" and filename or (relativeDir .. "\\" .. filename)
+            local attributes = tonumber(data.attributes) or 0
+            if hasFileAttribute(attributes, 0x10) then
+                -- Never follow junctions/symlinks outside csgo/sounds.
+                if not hasFileAttribute(attributes, 0x400) and safeRelativeSoundPath(relative) then
+                    scanSoundDirectory(absoluteDir .. "\\" .. filename, relative, paths, depth + 1)
+                end
+            elseif filename:lower():sub(-7) == ".vsnd_c" and safeRelativeSoundPath(relative) then
+                paths[#paths + 1] = relative:sub(1, #relative - 7)
+            end
+        end
+    until findNextA(handle, data) == 0
+    findClose(handle)
+end
+
 local function scanSounds()
     local names, paths = {}, {}
     if not ensureSoundDirectory() or not findFirstA or not findNextA or not findClose or type(f) ~= "table" then
         return { "[ csgo\\sounds unavailable ]" }, paths
     end
-    local data = f.new("RGN_SOUND_FIND_DATA")
-    local invalid = f.cast("void*", f.cast("intptr_t", -1))
-    local handle = findFirstA(soundDir .. "\\*.vsnd_c", data)
-    if handle ~= invalid then
-        repeat
-            local filename = f.string(data.filename)
-            local lower = filename:lower()
-            -- A scanned basename is later inserted into a console command.
-            -- Keep only ordinary filename characters and reject separators or
-            -- command delimiters even though Windows itself permits them.
-            if lower:sub(-7) == ".vsnd_c" and filename:match("^[%w%s%._%-]+$") then
-                paths[#paths + 1] = filename:sub(1, #filename - 7)
-            end
-        until findNextA(handle, data) == 0
-        findClose(handle)
-    end
+    scanSoundDirectory(soundDir, "", paths, 0)
     table.sort(paths, function(a, b) return a:lower() < b:lower() end)
     for i = 1, #paths do names[i] = paths[i] end
     if #names == 0 then names[1] = "[ put .vsnd_c in csgo\\sounds ]" end
@@ -7628,11 +7651,12 @@ local function selectedSound(combo)
 end
 
 local function playSound(path, volume)
-    if path == "" then return false end
+    path = tostring(path or ""):gsub("/", "\\")
+    if path == "" or not safeRelativeSoundPath(path) then return false end
     local amount = math.max(0, math.min(100, tonumber(volume) or 100)) / 100
     if amount <= 0 then return false end
     pcall(function() client.SetConVar("snd_toolvolume", amount, true) end)
-    local ok = pcall(function() client.Command("play sounds\\" .. path, true) end)
+    local ok = pcall(function() client.Command('play "sounds\\' .. path .. '"', true) end)
     return ok
 end
 
@@ -7696,6 +7720,14 @@ local function entityIndex(entity)
     return value and value > 0 and value or nil
 end
 
+local function pawnHandleIndex(value)
+    value = tonumber(value)
+    if not value or value == 0 or value == -1 then return nil end
+    local index = value % 32768
+    if index <= 0 or index == 32767 then return nil end
+    return index
+end
+
 local function controllerPawn(controller)
     local pawn
     if not controller then return nil end
@@ -7704,57 +7736,125 @@ local function controllerPawn(controller)
     return pawn
 end
 
-local function isLocalAttacker(slot)
-    slot = tonumber(slot)
-    if not slot or slot < 0 then return false end
-    local wantedController = (slot % 32768) + 1
+local function isLocalAttacker(rawAttacker, attackerPawnHandle)
+    rawAttacker = tonumber(rawAttacker)
+    local attackerPawnIndex = pawnHandleIndex(attackerPawnHandle)
+    local attackerEntry = pawnHandleIndex(rawAttacker)
+    local localPawn, localPawnIndex, localClientIndex
+    pcall(function() localPawn = entities.GetLocalPlayer() end)
+    localPawnIndex = entityIndex(localPawn)
+    pcall(function() localClientIndex = tonumber(client.GetLocalPlayerIndex()) end)
+
+    if attackerPawnIndex and (
+        attackerPawnIndex == localPawnIndex or attackerPawnIndex == localClientIndex
+    ) then return true end
+
+    local attackerPlayerIndex
+    if rawAttacker and rawAttacker > 0 then
+        pcall(function() attackerPlayerIndex = tonumber(client.GetPlayerIndexByUserID(rawAttacker)) end)
+    end
+    if attackerPlayerIndex and localClientIndex and attackerPlayerIndex == localClientIndex then return true end
+    if rawAttacker and (
+        rawAttacker == localPawnIndex or rawAttacker == localClientIndex
+        or attackerEntry == localPawnIndex or attackerEntry == localClientIndex
+    ) then return true end
+
     local controllers
     pcall(function() controllers = entities.FindByClass("CCSPlayerController") end)
     if type(controllers) ~= "table" then return false end
-    local localPawn
-    pcall(function() localPawn = entities.GetLocalPlayer() end)
-    local localPawnIndex = entityIndex(localPawn)
     for i = 1, #controllers do
         local controller = controllers[i]
-        if entityIndex(controller) == wantedController then
-            local isLocal
-            pcall(function() isLocal = controller:GetFieldBool("m_bIsLocalPlayerController") end)
-            if isLocal == true then return true end
-            local pawnIndex = entityIndex(controllerPawn(controller))
-            return localPawnIndex ~= nil and pawnIndex == localPawnIndex
+        local controllerIndex = entityIndex(controller)
+        local controllerIsLocal
+        pcall(function() controllerIsLocal = controller:GetFieldBool("m_bIsLocalPlayerController") end)
+        local pawnIndex = entityIndex(controllerPawn(controller))
+        if controllerIsLocal == true or (localPawnIndex and pawnIndex == localPawnIndex) then
+            if attackerPawnIndex and pawnIndex and attackerPawnIndex == pawnIndex then return true end
+            if rawAttacker and (
+                rawAttacker == controllerIndex or rawAttacker + 1 == controllerIndex
+                or attackerEntry == controllerIndex or rawAttacker == pawnIndex
+                or attackerEntry == pawnIndex
+            ) then return true end
+            if localClientIndex and controllerIndex == localClientIndex and attackerPlayerIndex == localClientIndex then
+                return true
+            end
         end
     end
+
+    if rawAttacker and localClientIndex then
+        local info, localUserID
+        pcall(function() info = client.GetPlayerInfo(localClientIndex) end)
+        pcall(function() localUserID = tonumber(info.UserID or info.userID or info.userid) end)
+        if localUserID and rawAttacker == localUserID then return true end
+    end
     return false
+end
+
+local lastKillSignature, lastKillAt = nil, -100
+
+local function killSignature(attacker, victim, attackerPawn, victimPawn)
+    return table.concat({
+        tostring(pawnHandleIndex(attackerPawn) or attacker or 0),
+        tostring(pawnHandleIndex(victimPawn) or victim or 0),
+    }, ":")
+end
+
+local function playKillOnce(signature)
+    local t = clock()
+    if signature == lastKillSignature and t - lastKillAt < 0.50 then return end
+    lastKillSignature, lastKillAt = signature, t
+    playSound(selectedSound(killCombo), killVolume:Get())
 end
 
 M._customSoundsEventCallback = function(event)
     if not hitEnabled:Get() and not killEnabled:Get() then return end
     local name
     pcall(function() name = event:GetName() end)
-    if name ~= "player_hurt" then return end
-    local attacker, victim, health, damage
+    if name ~= "player_hurt" and name ~= "player_death" then return end
+    local attacker, victim, attackerPawn, victimPawn, health, damage
     pcall(function()
         attacker = tonumber(event:GetInt("attacker"))
         victim = tonumber(event:GetInt("userid"))
+        attackerPawn = tonumber(event:GetInt("attacker_pawn"))
+        victimPawn = tonumber(event:GetInt("userid_pawn"))
         health = tonumber(event:GetInt("health"))
         damage = tonumber(event:GetInt("dmg_health"))
     end)
-    if not attacker or attacker < 0 or attacker == victim or not damage or damage <= 0 then return end
-    if not isLocalAttacker(attacker) then return end
+    local attackerPawnIndex, victimPawnIndex = pawnHandleIndex(attackerPawn), pawnHandleIndex(victimPawn)
+    if attacker and victim and attacker == victim then return end
+    if attackerPawnIndex and victimPawnIndex and attackerPawnIndex == victimPawnIndex then return end
+    if not isLocalAttacker(attacker, attackerPawn) then return end
+
+    local signature = killSignature(attacker, victim, attackerPawn, victimPawn)
+    if name == "player_death" then
+        if killEnabled:Get() then playKillOnce(signature) end
+        return
+    end
+    if not damage or damage <= 0 then return end
     if health and health <= 0 then
-        if killEnabled:Get() then playSound(selectedSound(killCombo), killVolume:Get()) end
+        if killEnabled:Get() then playKillOnce(signature)
+        elseif hitEnabled:Get() then playSound(selectedSound(hitCombo), hitVolume:Get()) end
     elseif hitEnabled:Get() then
         playSound(selectedSound(hitCombo), hitVolume:Get())
     end
 end
 
-pcall(function() if client and type(client.AllowListener) == "function" then client.AllowListener("player_hurt") end end)
+local function requestSoundListeners()
+    pcall(function()
+        if client and type(client.AllowListener) == "function" then
+            client.AllowListener("player_hurt")
+            client.AllowListener("player_death")
+        end
+    end)
+end
+
+requestSoundListeners()
 observedConfig = currentSnapshot()
 M:OnFrame(function()
     local now = clock()
     if now >= nextListenerRefresh then
         nextListenerRefresh = now + 2.0
-        pcall(function() if client and type(client.AllowListener) == "function" then client.AllowListener("player_hurt") end end)
+        requestSoundListeners()
     end
     if now < nextConfigPoll then return end
     nextConfigPoll = now + 0.50
@@ -10004,9 +10104,10 @@ print("[rgnVotes] built-in service loaded | always on | safe logic + local chat 
 end)
 
 -- Aimware v6 only delivers these particular CS2 events reliably through its
--- anonymous FireGameEvent overload. Keep exactly one process-wide bridge whose
--- closure captures no module state. Lua reloads only replace state.dispatch;
--- they never add another native callback or leave a stale GameEvent consumer.
+-- anonymous FireGameEvent overload. Aimware removes that native callback when
+-- the Lua unloads, while _G survives the reload. Register one fresh callback on
+-- every load and gate it with a token: the newest callback is the only logical
+-- consumer even on builds that keep an older anonymous callback alive.
 do
     local callbackId = "rgnMultitool_GameEvents"
     local unloadId = "rgnMultitool_GameEventsUnload"
@@ -10045,31 +10146,30 @@ do
 
     pcall(callbacks.Unregister, "FireGameEvent", callbackId)
     pcall(callbacks.Unregister, "Unload", unloadId)
-    if bridge.registered ~= true then
-        local registered, registerError = pcall(function()
-            callbacks.Register("FireGameEvent", function(event)
-                local current = rawget(_G, bridgeKey)
-                if type(current) ~= "table" then return end
-                local dispatcher = current.dispatch
-                if type(dispatcher) ~= "function" then return end
-                current.events = (tonumber(current.events) or 0) + 1
-                local ok, err = pcall(dispatcher, event)
-                if not ok then
-                    current.lastError = tostring(err)
-                    print("[rgnMultitool] event bridge error: " .. tostring(err))
-                end
-            end)
+    local registered, registerError = pcall(function()
+        callbacks.Register("FireGameEvent", function(event)
+            local current = rawget(_G, bridgeKey)
+            if type(current) ~= "table" or current.token ~= token then return end
+            local dispatcher = current.dispatch
+            if type(dispatcher) ~= "function" then return end
+            current.events = (tonumber(current.events) or 0) + 1
+            local ok, err = pcall(dispatcher, event)
+            if not ok then
+                current.lastError = tostring(err)
+                print("[rgnMultitool] event bridge error: " .. tostring(err))
+            end
         end)
-        bridge.registered = registered == true
-        if not registered then
-            print("[rgnMultitool] stable event bridge failed: " .. tostring(registerError))
-        end
+    end)
+    bridge.registered = registered == true
+    if not registered then
+        print("[rgnMultitool] stable event bridge failed: " .. tostring(registerError))
     end
 
     callbacks.Register("Unload", unloadId, function()
         local current = rawget(_G, bridgeKey)
         if type(current) == "table" and current.token == token then
             current.dispatch = nil
+            current.registered = false
         end
         M._killsayEventCallback = nil
         M._customSoundsEventCallback = nil

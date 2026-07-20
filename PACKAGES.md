@@ -25,18 +25,19 @@ If Steam is installed elsewhere, open Steam, right-click Counter-Strike 2, selec
 
 1. Download `rgnMultitool-Sounds-v1.0.zip` from the asset release.
 2. Open the archive and extract its contents into CS2's `game\csgo` directory.
-3. Confirm that the final files are directly inside:
+3. Confirm that the final files are inside `game\csgo\sounds`. Subfolders are supported:
 
    ```text
    game\csgo\sounds\bell.vsnd_c
    game\csgo\sounds\bonk.vsnd_c
    game\csgo\sounds\hitmarker.vsnd_c
+   game\csgo\sounds\my_pack\custom_hit.vsnd_c
    ```
 
 4. Run rgnMultitool, open **CUSTOM SOUNDS**, and press **Refresh csgo/sounds**.
 5. Use the preview buttons before enabling the independent hit and kill effects.
 
-Do not create an extra `sounds\sounds` folder. The `.vsnd_c` files must be immediately inside `game\csgo\sounds`.
+Do not create an accidental extra `sounds\sounds` folder. The `.vsnd_c` files must remain somewhere below `game\csgo\sounds`.
 
 ## Custom character pack
 
@@ -83,7 +84,7 @@ Repeat the second command for every numbered character part. A mismatched hash m
 ### The sound list is empty
 
 - Verify the extension is `.vsnd_c`, not `.wav`, `.mp3` or `.vsnd`.
-- Verify the files are directly inside `game\csgo\sounds`.
+- Verify the files are inside `game\csgo\sounds` or one of its subfolders.
 - Press **Refresh csgo/sounds** after copying the files.
 
 ### No custom characters are listed

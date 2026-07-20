@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.3 - 2026-07-19
+
+### Portable custom sounds and reload-safe events
+
+- Re-registers one token-gated anonymous `FireGameEvent` bridge on every Lua load, restoring Killsay, Custom Sounds and Vote Revealer after updates or manual reloads without duplicate logical dispatch.
+- Resolves the local attacker through current `attacker_pawn` handles as well as legacy UserID and controller-index event layouts.
+- Handles both `player_hurt` and `player_death`, with deduplication so a fatal hit cannot play the kill sound twice.
+- Discovers safe `.vsnd_c` files recursively inside `game/csgo/sounds`, including user-created files and organized subfolders.
+- Quotes sound resource paths during playback and retains manual-only scanning at startup or when Refresh is pressed.
+
 ## 1.2.2 - 2026-07-19
 
 ### Safe event bridge and halftime crash fix
