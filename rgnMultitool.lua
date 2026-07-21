@@ -1,80 +1,45 @@
--- rgnMultitool v1.3.1: idle-path and event-dispatch performance update.
--- Keeps the proven per-file configuration/cache layout from v1.1.0.
--- Same public v1.3.0 feature/timing baseline with
--- idle-callback, hot-event telemetry and per-frame allocation reductions.
-local RGN_MULTITOOL_VERSION = "1.3.1"
+-- rgnMultitool 1.3.2
+local RGN_MULTITOOL_VERSION = "1.3.2"
 local RGN_MULTITOOL_SIGNATURE = "RGN_MULTITOOL_SOURCE_V1"
 _G.RGN_MULTITOOL_VERSION = RGN_MULTITOOL_VERSION
-pcall(function()
-    pcall(callbacks.Unregister, "Draw", "rgnMultitool_Watermark")
-    pcall(callbacks.Unregister, "Draw", "rgnMultitool_MISCLogic")
-    pcall(callbacks.Unregister, "CreateMove", "rgnMultitool_MISCLogicMove")
-    pcall(callbacks.Unregister, "FireGameEvent", "rgnMultitool_MISCEvents")
-    pcall(callbacks.Unregister, "FireGameEvent", "rgnMultitool_WeaponsSessionEvents")
-    pcall(callbacks.Unregister, "FireGameEvent", "rgnMultitool_GameEvents")
-    pcall(callbacks.Unregister, "Unload", "rgnMultitool_GameEventsUnload")
-    pcall(callbacks.Unregister, "Unload", "rgnMultitool_MISCUnload")
-    if type(M) == "table" and type(M.Watermark) == "function" then pcall(M.Watermark, M, false) end
-end)-- rgnMultitool - unified Aimware CS2 toolkit.
-print("[rgnMultitool] unified build loading")
 
--- Aimware keeps each Lua as a separate loaded script. Close the three standalone
--- copies first; their Unload handlers clean up callbacks before this file starts
--- registering its uniquely named replacements.
-pcall(function()
-    if type(UnloadScript) == "function" then
-        pcall(UnloadScript, "rgnSkins.lua")
-        pcall(UnloadScript, "rgnMisc.lua")
-        pcall(UnloadScript, "rgnWEAPONS.lua")
-    end
-end)
-
--- Remove any leftover standalone callbacks as a compatibility fallback.
-pcall(function()
-    local ids = {
-        "rgnSkins_UIDraw", "rgnSkins_UIInput", "rgnSkins_UIUnload",
-        "rgnSkins_StableEvents", "rgnSkins_SpawnWatch", "rgnSkins_SetModelUnload",
-        "rgnMISC_UIDraw", "rgnMISC_UIInput", "rgnMISC_UIUnload",
-        "rgnMISC_Logic", "rgnMISC_Events", "rgnMISC_Unload",
-        "rgnWEAPONS_UIDraw", "rgnWEAPONS_UIInput", "rgnWEAPONS_UIUnload",
-        "rgnWEAPONS_Engine", "rgnWEAPONS_Unload", "rgnWEAPONS_Watermark", "rgnWEAPONS_LateMesh"
-    }
+local staleEvents = { "Draw", "CreateMove", "FireGameEvent", "Unload" }
+local function clearCallbacks(ids)
     for _, id in ipairs(ids) do
-        pcall(callbacks.Unregister, "Draw", id)
-        pcall(callbacks.Unregister, "CreateMove", id)
-        pcall(callbacks.Unregister, "FireGameEvent", id)
-        pcall(callbacks.Unregister, "Unload", id)
+        for _, event in ipairs(staleEvents) do
+            pcall(callbacks.Unregister, event, id)
+        end
     end
-end)
+end
+
+clearCallbacks({
+    "rgnMultitool_Watermark", "rgnMultitool_MISCLogic",
+    "rgnMultitool_MISCLogicMove", "rgnMultitool_MISCEvents",
+    "rgnMultitool_WeaponsSessionEvents", "rgnMultitool_GameEvents",
+    "rgnMultitool_GameEventsUnload", "rgnMultitool_MISCUnload"
+})
+if type(M) == "table" and type(M.Watermark) == "function" then
+    pcall(M.Watermark, M, false)
+end
+
+if type(UnloadScript) == "function" then
+    pcall(UnloadScript, "rgnSkins.lua")
+    pcall(UnloadScript, "rgnMisc.lua")
+    pcall(UnloadScript, "rgnWEAPONS.lua")
+end
+
+clearCallbacks({
+    "rgnSkins_UIDraw", "rgnSkins_UIInput", "rgnSkins_UIUnload",
+    "rgnSkins_StableEvents", "rgnSkins_SpawnWatch", "rgnSkins_SetModelUnload",
+    "rgnMISC_UIDraw", "rgnMISC_UIInput", "rgnMISC_UIUnload",
+    "rgnMISC_Logic", "rgnMISC_Events", "rgnMISC_Unload",
+    "rgnWEAPONS_UIDraw", "rgnWEAPONS_UIInput", "rgnWEAPONS_UIUnload",
+    "rgnWEAPONS_Engine", "rgnWEAPONS_Unload", "rgnWEAPONS_Watermark",
+    "rgnWEAPONS_LateMesh"
+})
+
 local __RGN_GUILIB = [===[
 local M = {}
-local LOGO_B64 = "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"
-local LOGO_TEXTURE
-
-local function decodeBase64(data)
-    local alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-    local map = {}
-    for i = 1, #alphabet do map[alphabet:byte(i)] = i - 1 end
-    local out = {}
-    for i = 1, #data, 4 do
-        local a, b = map[data:byte(i)] or 0, map[data:byte(i + 1)] or 0
-        local c, d = map[data:byte(i + 2)] or 0, map[data:byte(i + 3)] or 0
-        local n = a * 262144 + b * 4096 + c * 64 + d
-        out[#out + 1] = string.char(math.floor(n / 65536) % 256)
-        if data:byte(i + 2) ~= 61 then out[#out + 1] = string.char(math.floor(n / 256) % 256) end
-        if data:byte(i + 3) ~= 61 then out[#out + 1] = string.char(n % 256) end
-    end
-    return table.concat(out)
-end
-
-local function initLogo()
-    if LOGO_TEXTURE then return true end
-    local ok = pcall(function()
-        local rgba, width, height = common.DecodePNG(decodeBase64(LOGO_B64))
-        if rgba and width and height then LOGO_TEXTURE = draw.CreateTexture(rgba, width, height) end
-    end)
-    return ok and LOGO_TEXTURE ~= nil
-end
 M.VERSION = "1.0"
 
 local T = {
@@ -159,7 +124,6 @@ local function lerpc(a, b, t)
 end
 
 local ffi = ffi
-local FONT_URLS = {} -- Portable build uses Windows system fonts; no downloads.
 
 local FONT, FONT_B, FONT_LOGO
 local function initFonts()
@@ -171,14 +135,10 @@ local function initFonts()
             if f then return f, name end
         end
     end
-    local picked
-    FONT,      picked = mk(T.font, T.font_size, 400)
+    FONT              = mk(T.font, T.font_size, 400)
     FONT_B            = mk(T.font, T.font_size, 600)
     FONT_LOGO         = mk(T.font_logo, T.font_size + 2, 700) or FONT_B
-    print("[rgnMultitool] font: " .. tostring(picked))
 end
-
-local function fontInitCoro() end
 
 local function setcol(c) draw.Color(c[1], c[2], c[3], rnd((c[4] or 255) * ALPHA)) end
 
@@ -187,12 +147,14 @@ local function rect(x, y, w, h, c)
 end
 
 local function drawLogo(x, y, w, h)
-    if not LOGO_TEXTURE and not initLogo() then return false end
     local ok = pcall(function()
-        draw.SetTexture(LOGO_TEXTURE)
-        draw.Color(255, 255, 255, rnd(255 * ALPHA))
-        draw.FilledRect(rnd(x), rnd(y), rnd(x + w), rnd(y + h))
-        draw.SetTexture(nil)
+        if FONT_LOGO then draw.SetFont(FONT_LOGO) end
+        local label = "RGN"
+        local tw, th = draw.GetTextSize(label)
+        draw.Color(T.accent[1], T.accent[2], T.accent[3], rnd(220 * ALPHA))
+        draw.OutlinedRect(rnd(x), rnd(y), rnd(x + w), rnd(y + h))
+        draw.Color(T.texthi[1], T.texthi[2], T.texthi[3], rnd(255 * ALPHA))
+        draw.Text(rnd(x + (w - tw) * 0.5), rnd(y + (h - th) * 0.5 - 1), label)
     end)
     return ok
 end
@@ -1645,9 +1607,9 @@ function M:_tabInput(win)
 end
 
 function M:_drawTabBar(win)
-    drawLogo(win.x + 13, win.y + 9, 40, 40)
-    text(win.x + 62, win.y + 12, T.texthi, "rgnMultitool", FONT_LOGO)
-    text(win.x + 62, win.y + 33, T.textdim, "Aimware Lua", FONT_SMALL)
+    drawLogo(win.x + 15, win.y + 14, 30, 30)
+    text(win.x + 56, win.y + 12, T.texthi, "rgnMultitool", FONT_LOGO)
+    text(win.x + 56, win.y + 33, T.textdim, "Aimware Lua", FONT_SMALL)
     local credit = fitText("Made by " .. aimwareHeaderUser(), 180, FONT_SMALL)
     text(win.x + win.w - 50, win.y + 22, T.textdim, credit, FONT_SMALL, "right")
 
@@ -1874,29 +1836,29 @@ end
 function M:_frame()
     local real = self._win
 
-    -- Compact mode: rgnMultitool identifier and expand button.
+    -- Minimized header.
     if self._minimized then
         local ease = smooth(self._t)
         ALPHA = ease
-        local miniW, miniH = 184, 48
-        local expandX = real.x + miniW - 31
-        if clicked(expandX, real.y + 12, 24, 24) then
+        local miniW, miniH = 154, 42
+        local expandX = real.x + miniW - 28
+        if clicked(expandX, real.y + 10, 22, 22) then
             self._minimized = false
             self._dragWin = nil
             return
         end
-        local dragWin = { x = real.x, y = real.y, w = miniW - 34, h = miniH }
+        local dragWin = { x = real.x, y = real.y, w = miniW - 31, h = miniH }
         self:_drag(dragWin)
         real.x, real.y = dragWin.x, dragWin.y
-        expandX = real.x + miniW - 31
+        expandX = real.x + miniW - 28
 
         rbox(real.x + 5, real.y + 7, miniW, miniH, 9, T.shadow, { 0, 0, 0, 0 })
         rbox(real.x, real.y, miniW, miniH, 9, T.bg, T.border)
         rfill(real.x, real.y, miniW, 2, 9, T.accent, true, true, false, false)
-        drawLogo(real.x + 7, real.y + 7, 34, 34)
-        text(real.x + 47, real.y + 16, T.texthi, "Multitool", FONT_LOGO)
-        rbox(expandX, real.y + 12, 24, 24, 5, T.widget, T.border)
-        text(expandX + 12, real.y + 15, T.texthi, "+", FONT_B, "center")
+        drawLogo(real.x + 7, real.y + 7, 28, 28)
+        text(real.x + 43, real.y + 13, T.texthi, "Multitool", FONT_LOGO)
+        rbox(expandX, real.y + 10, 22, 22, 5, T.widget, T.border)
+        text(expandX + 11, real.y + 12, T.texthi, "+", FONT_B, "center")
         return
     end
 
@@ -2222,8 +2184,6 @@ function M:Build(opts)
         end)
     end)
 
-    print(string.format("[rgnMultitool] guilib v%s ready: %d tabs, mouse=%s clock=%s",
-        tostring(M.VERSION), #self._tabs, _getMouse and "ok" or "NIL", _clock and "ok" or "NIL"))
     return self
 end
 
@@ -2296,17 +2256,15 @@ _G.RGN_MULTITOOL_STATE = RGN_MULTI
 local function loadModule(name, fn)
     local ok, err = pcall(fn)
     if not ok then
-        print("[rgnMultitool] " .. name .. " module error: " .. tostring(err))
+        print("[rgn] " .. name .. ": " .. tostring(err))
         return false
     end
-    print("[rgnMultitool] " .. name .. " module ready")
     return true
 end
 
 loadModule("SKINS", function()
 local M = M
--- Lightweight local-player-only model engine. Unlike the full changer, this
--- does not scan weapons, knives, gloves, sounds or the filesystem every tick.
+-- Local player model override.
 local SetModel = {
     path = nil, error = nil, phase = "idle", persistence = true,
     original = nil, lastAppliedPath = nil,
@@ -2750,8 +2708,7 @@ local function modelCategory(item)
     return 2
 end
 
--- Lightweight catalogue discovery. This only enumerates directory entries below
--- csgo/characters once at startup. It never opens or reads model/material files.
+-- Build the character list once at startup.
 pcall(function() ffi.cdef[[
     typedef struct {
         uint32_t attributes;
@@ -2865,11 +2822,8 @@ table.sort(VALIDATED_MODELS, function(a, b)
     local an, bn = a.name:lower(), b.name:lower()
     return an == bn and a.path:lower() < b.path:lower() or an < bn
 end)
-print(string.format("[rgnSkins] characters catalogue: %d filenames listed", #VALIDATED_MODELS))
 if #VALIDATED_MODELS == 0 then
     print("[rgnSkins] SETUP: copy the complete game/csgo/characters folder, enable game scripting + insecure FFI, then rerun")
-else
-    print("[rgnSkins] portable setup ready; catalogue loaded from this PC")
 end
 
 -- Only restore paths that still exist in this PC's local catalogue. The spawn
@@ -3218,7 +3172,7 @@ function EXT.install()
     local match, originalTarget, reason = validateSite()
     if not match then EXT.lastError = reason; return false, reason end
 
-    -- If this session already owns a validated trampoline, safely reconnect it.
+    -- Reconnect a trampoline already owned by this session.
     if EXT.page and EXT.code and EXT.match == match and EXT.originalTarget == originalTarget then
         if r_i32(match + 1) ~= EXT.originalRel then
             return false, "call site is owned by another hook"
@@ -3513,7 +3467,6 @@ pcall(function()
     end)
 end)
 
-print("[rgnMultitool] viewmodel loaded: XYZ + optional left-hand knife | opt-in extended hook")
 end)
 
 loadModule("SCOPE OVERLAY", function()
@@ -3957,7 +3910,6 @@ pcall(function()
     end)
 end)
 
-print("[rgnScope] loaded | supersampled Neverlose glow texture | color configurable")
 end)
 
 loadModule("WEAPONS", function()
@@ -7167,7 +7119,7 @@ pcall(function()
 end)
 
 
-print("[rgnWEAPONS] loaded | engine=" .. (C and ("ready from " .. tostring(engineWhere)) or tostring(engineError)))
+if not C then print("[rgn] WEAPONS: " .. tostring(engineError)) end
 end)
 
 loadModule("MOVEMENT", function()
@@ -7933,7 +7885,6 @@ callbacks.Register("Unload", "rgnMultitool_MovementUnload", function()
     pcall(callbacks.Unregister, "FireGameEvent", "rgnMultitool_MovementEvents")
 end)
 
-print("[rgnMovement] loaded | callback=main multitool hook | velocity/trail/edge/null ready")
 end)
 
 loadModule("CUSTOM SOUNDS", function()
@@ -8390,7 +8341,6 @@ callbacks.Register("Unload", function()
     M._customSoundsEventActive = nil
 end)
 
-print(string.format("[rgnSounds] loaded | strict-local events | %d compiled sounds | folder=%s", #soundPaths, tostring(soundDir or "unresolved")))
 end)
 
 loadModule("KILLSAY", function()
@@ -9338,7 +9288,6 @@ end
 requestKillsayListeners()
 lastSessionKey = currentSessionKey()
 
-print("[rgnKillsay] loaded | opt-in | clean packs + Argentina + custom")
 end)
 loadModule("IDENTITY", function()
 local M = M
@@ -9770,7 +9719,6 @@ callbacks.Register("Unload", function()
 end)
 
 writeRuntime("module loaded")
-print("[rgnIdentity] loaded | custom name + scoreboard prefix | safe engine2 validation")
 end)
 
 loadModule("VOTES", function()
@@ -10559,9 +10507,7 @@ rawset(_G, "RGN_VOTE_RUNTIME_GENERATION", runtimeGeneration)
 local logicBusy = false
 callbacks.Register("CreateMove", "rgnMultitool_VoteLogic", function()
     if rawget(_G, "RGN_VOTE_RUNTIME_GENERATION") ~= runtimeGeneration or logicBusy then return end
-    -- Gate before pcall: CreateMove may exceed 100 Hz while vote/session work
-    -- intentionally runs at 20 Hz. This keeps identical service cadence while
-    -- avoiding protected-call overhead on commands that would return anyway.
+    -- Vote/session work runs at 20 Hz.
     local t = clock()
     if t < nextLogicTick then return end
     nextLogicTick = t + 0.05
@@ -10582,14 +10528,9 @@ callbacks.Register("Unload", function()
     logicBusy = false
 end)
 
-print("[rgnVotes] built-in service loaded | always on | safe logic + local chat + overlay")
 end)
 
--- Aimware v6 only delivers these particular CS2 events reliably through its
--- anonymous FireGameEvent overload. Aimware removes that native callback when
--- the Lua unloads, while _G survives the reload. Register one fresh callback on
--- every load and gate it with a token: the newest callback is the only logical
--- consumer even on builds that keep an older anonymous callback alive.
+-- Aimware's anonymous event bridge is tokened so reloads cannot double-dispatch.
 do
     local callbackId = "rgnMultitool_GameEvents"
     local unloadId = "rgnMultitool_GameEventsUnload"
@@ -10677,4 +10618,4 @@ do
 end
 
 M:Build({ w = 940, h = 560, autoH = false, resize = true })
-print("[rgnMultitool] ready: Weapons, Agents, Skins Custom, Viewmodel, Scope Overlay, Custom Sounds, Movement, Identity, Killsay and Configs")
+print("[rgn] ready " .. RGN_MULTITOOL_VERSION)

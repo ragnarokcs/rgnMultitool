@@ -2,6 +2,12 @@
 
 Source-visible Aimware Lua toolkit for CS2. Every module lives in one compact menu and optional gameplay modules start disabled.
 
+## Download
+
+[**Download `loader.lua`**](https://raw.githubusercontent.com/ragnarokcs/rgnMultitool/main/loader.lua)
+
+`loader.lua` is the primary and recommended entry point. It validates and runs the current public source, keeps a last-known-good offline cache and downloads the full Lua again only when `version.txt` changes. `rgnMultitool.lua` remains available for source review and development; regular users do not need to install it manually.
+
 ## Features
 
 ### Cosmetics
@@ -66,12 +72,12 @@ The distributed `loader.lua` checks the small `version.txt` manifest on startup.
 
 ## Installation
 
-1. Download `loader.lua` and place it in Aimware's Lua scripts folder.
+1. Download only [`loader.lua`](https://raw.githubusercontent.com/ragnarokcs/rgnMultitool/main/loader.lua) and place it in Aimware's Lua scripts folder.
 2. In Aimware Lua permissions, allow internet connections and editing Lua files.
 3. Run `loader.lua`.
 4. Keep only one rgnMultitool loader/source active at a time.
 
-The loader and full source use relative data filenames and contain no Windows username or PC-specific installation path.
+Keep `loader.lua` as the only rgnMultitool script configured for autorun. The loader and full source use relative data filenames and contain no Windows username or PC-specific installation path.
 
 ## Update safety
 
