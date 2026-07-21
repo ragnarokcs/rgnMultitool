@@ -1,6 +1,8 @@
--- rgnMultitool v1.3.0: polished scope overlay and strict-local custom sounds.
+-- rgnMultitool v1.3.1: idle-path and event-dispatch performance update.
 -- Keeps the proven per-file configuration/cache layout from v1.1.0.
-local RGN_MULTITOOL_VERSION = "1.3.0"
+-- Same public v1.3.0 feature/timing baseline with
+-- idle-callback, hot-event telemetry and per-frame allocation reductions.
+local RGN_MULTITOOL_VERSION = "1.3.1"
 local RGN_MULTITOOL_SIGNATURE = "RGN_MULTITOOL_SOURCE_V1"
 _G.RGN_MULTITOOL_VERSION = RGN_MULTITOOL_VERSION
 pcall(function()
@@ -2072,6 +2074,56 @@ function M:Build(opts)
     local menuRef
     pcall(function() menuRef = gui.Reference("MENU") end)
 
+    -- Runtime overlays must keep drawing while the Aimware menu is closed.
+    -- Keep this dispatcher outside Draw so Lua does not allocate a fresh
+    -- closure on every rendered frame.
+    local function drawRuntimeOverlays(t)
+        local movementDrawActive = self._movementDrawActive
+        if type(self._movementDrawCallback) == "function"
+            and (type(movementDrawActive) ~= "function" or movementDrawActive()) then
+            local ok, err = pcall(self._movementDrawCallback)
+            self._movementDrawAliveAt = t
+            if ok then
+                self._movementDrawError = nil
+            else
+                local message = tostring(err)
+                if self._movementDrawError ~= message then
+                    self._movementDrawError = message
+                    print("[rgnMovement] main Draw hook error: " .. message)
+                end
+            end
+        end
+        local killsayDrawActive = self._killsayDrawActive
+        if type(self._killsayDrawCallback) == "function"
+            and (type(killsayDrawActive) ~= "function" or killsayDrawActive()) then
+            local ok, err = pcall(self._killsayDrawCallback)
+            self._killsayDrawAliveAt = t
+            if ok then
+                self._killsayDrawError = nil
+            else
+                local message = tostring(err)
+                if self._killsayDrawError ~= message then
+                    self._killsayDrawError = message
+                    print("[rgnKillsay] main Draw hook error: " .. message)
+                end
+            end
+        end
+        local scopeDrawActive = self._scopeDrawActive
+        if type(self._scopeDrawCallback) == "function"
+            and (type(scopeDrawActive) ~= "function" or scopeDrawActive()) then
+            local ok, err = pcall(self._scopeDrawCallback)
+            if ok then
+                self._scopeDrawError = nil
+            else
+                local message = tostring(err)
+                if self._scopeDrawError ~= message then
+                    self._scopeDrawError = message
+                    print("[rgnScope] main Draw hook error: " .. message)
+                end
+            end
+        end
+    end
+
     callbacks.Register("Draw", "rgnMultitool_UIDraw", function()
         local open = true
         if menuRef then pcall(function() open = menuRef:IsActive() end) end
@@ -2096,52 +2148,8 @@ function M:Build(opts)
             return
         end
 
-        local movementDrawn = false
-        local function drawMovementOverlay()
-            if movementDrawn then return end
-            movementDrawn = true
-            if type(self._movementDrawCallback) == "function" then
-                local ok, err = pcall(self._movementDrawCallback)
-                self._movementDrawAliveAt = t
-                if ok then
-                    self._movementDrawError = nil
-                else
-                    local message = tostring(err)
-                    if self._movementDrawError ~= message then
-                        self._movementDrawError = message
-                        print("[rgnMovement] main Draw hook error: " .. message)
-                    end
-                end
-            end
-            if type(self._killsayDrawCallback) == "function" then
-                local ok, err = pcall(self._killsayDrawCallback)
-                self._killsayDrawAliveAt = t
-                if ok then
-                    self._killsayDrawError = nil
-                else
-                    local message = tostring(err)
-                    if self._killsayDrawError ~= message then
-                        self._killsayDrawError = message
-                        print("[rgnKillsay] main Draw hook error: " .. message)
-                    end
-                end
-            end
-            if type(self._scopeDrawCallback) == "function" then
-                local ok, err = pcall(self._scopeDrawCallback)
-                if ok then
-                    self._scopeDrawError = nil
-                else
-                    local message = tostring(err)
-                    if self._scopeDrawError ~= message then
-                        self._scopeDrawError = message
-                        print("[rgnScope] main Draw hook error: " .. message)
-                    end
-                end
-            end
-        end
-
         if not open and self._t < 0.005 and #self._toasts == 0 then
-            drawMovementOverlay()
+            drawRuntimeOverlays(t)
             self._t = 0
             return
         end
@@ -2153,19 +2161,21 @@ function M:Build(opts)
         for _, fn in ipairs(self._onframe) do pcall(fn, UI) end
 
         if not open and self._t < 0.005 then
-            drawMovementOverlay()
+            drawRuntimeOverlays(t)
             self._t = 0
             return
         end
 
         local ok, err = pcall(function() self:_frame() end)
         if not ok then print("[rgnMultitool] frame error: " .. tostring(err)) end
-        drawMovementOverlay()
+        drawRuntimeOverlays(t)
     end)
 
     pcall(function()
         callbacks.Register("CreateMove", "rgnMultitool_UIInput", function(cmd)
-        if cmd and type(M._viewmodelCommandCallback) == "function" then
+        local viewmodelCommandActive = M._viewmodelCommandActive
+        if cmd and type(M._viewmodelCommandCallback) == "function"
+            and (type(viewmodelCommandActive) ~= "function" or viewmodelCommandActive()) then
             local ok, err = pcall(M._viewmodelCommandCallback, cmd)
             M._viewmodelCommandAliveAt = now()
             if ok then
@@ -2178,7 +2188,9 @@ function M:Build(opts)
                 end
             end
         end
-        if cmd and type(M._movementCommandCallback) == "function" then
+        local movementCommandActive = M._movementCommandActive
+        if cmd and type(M._movementCommandCallback) == "function"
+            and (type(movementCommandActive) ~= "function" or movementCommandActive()) then
             local ok, err = pcall(M._movementCommandCallback, cmd)
             M._movementCommandAliveAt = now()
             if ok then
@@ -3455,6 +3467,11 @@ end
 -- Aimware may discard additional CreateMove callbacks. Route this through the
 -- Multitool's proven main command hook, shared with Movement, and emit a hand
 -- command only on spawn or weapon transitions.
+M._viewmodelCommandActive = function()
+    -- Keep one final command tick available after disabling so an owned
+    -- left-hand state is restored to the normal right hand immediately.
+    return knifeLeft:Get() == true or knifeLeftOwned == true
+end
 M._viewmodelCommandCallback = function()
     local ok, err = pcall(knifeHandTick)
     if not ok then
@@ -3489,6 +3506,7 @@ pcall(function()
         pcall(saveConfig)
         if knifeLeftOwned then pcall(commandHand, false) end
         M._viewmodelCommandCallback = nil
+        M._viewmodelCommandActive = nil
         if enabled:Get() then pcall(restore) end
         pcall(EXT.uninstall)
         pcall(callbacks.Unregister, "Unload", "rgnMultitool_ViewmodelUnload")
@@ -3862,6 +3880,11 @@ local fade, lastDrawAt = 0, clock()
 local scopeVisible = false
 local nextStatePoll, nextRemovalPoll, nextScreenPoll = 0, 0, 0
 local screenWidth, screenHeight = 0, 0
+M._scopeDrawActive = function()
+    -- The menu path keeps configuration/restoration immediate. Once closed,
+    -- a fully disabled and fully faded scope has no per-frame work to do.
+    return M._open == true or renderConfig.enabled == true or fade >= 0.01
+end
 M._scopeDrawCallback = function()
     local now = clock()
     local dt = clampValue(now - lastDrawAt, 0, 0.10)
@@ -3929,6 +3952,7 @@ pcall(function()
         pcall(draw.SetTexture, nil)
         scopeTexture = nil
         M._scopeDrawCallback = nil
+        M._scopeDrawActive = nil
         pcall(callbacks.Unregister, "Unload", "rgnMultitool_ScopeUnload")
     end)
 end)
@@ -7831,6 +7855,13 @@ local function onMovementCommand(cmd)
     if needsState then safe("jump trail", updateTrail, now()) end
 end
 
+M._movementCommandActive = function()
+    return velocityEnabled:Get() == true
+        or trailEnabled:Get() == true
+        or edgeEnabled:Get() == true
+        or nullEnabled:Get() == true
+        or debugEnabled:Get() == true
+end
 M._movementCommandCallback = function(cmd)
     moveActiveEvent, lastMovementAt = "Main/CreateMove", now()
     onMovementCommand(cmd)
@@ -7838,6 +7869,12 @@ end
 
 local observedSettings = settingsSnapshot()
 local dirtyAt, nextSettingsPoll = nil, 0
+M._movementDrawActive = function()
+    return M._open == true or dirtyAt ~= nil
+        or velocityEnabled:Get() == true
+        or trailEnabled:Get() == true
+        or debugEnabled:Get() == true
+end
 M._movementDrawCallback = function()
     local t = now()
     -- Visual fallback: state still updates when an injector accepts CreateMove
@@ -7869,7 +7906,7 @@ pcall(function()
         client.AllowListener("cs_game_disconnected")
     end
     callbacks.Register("FireGameEvent", "rgnMultitool_MovementEvents", function(event)
-
+        if type(M._movementCommandActive) == "function" and not M._movementCommandActive() then return end
         local name
         pcall(function() name = event:GetName() end)
         if name == "server_spawn" or name == "game_newmap" or name == "cs_game_disconnected" then
@@ -7887,7 +7924,9 @@ end)
 callbacks.Register("Unload", "rgnMultitool_MovementUnload", function()
     saveSettings()
     M._movementCommandCallback = nil
+    M._movementCommandActive = nil
     M._movementDrawCallback = nil
+    M._movementDrawActive = nil
     pcall(callbacks.Unregister, "PreMove", "rgnMultitool_MovementPreMove")
     pcall(callbacks.Unregister, "CreateMove", "rgnMultitool_MovementCreateMove")
     pcall(callbacks.Unregister, "Draw", "rgnMultitool_MovementDraw")
@@ -8092,6 +8131,10 @@ local killEnabled = killSection:Checkbox("Enable custom kill sound", cfgBool("ki
 local killCombo = killSection:Combo("Sound", soundNames, soundIndex(config.kill_sound))
 killComboWidget = killSection.ws[#killSection.ws]
 local killVolume = killSection:Slider("Volume", cfgNumber("kill_volume", 100, 0, 100), 0, 100, 1, "%.0f%%")
+
+M._customSoundsEventActive = function()
+    return hitEnabled:Get() == true or killEnabled:Get() == true
+end
 
 tab:Col()
 local librarySection = tab:Section("Sound library")
@@ -8344,6 +8387,7 @@ end)
 callbacks.Register("Unload", function()
     pcall(saveConfig)
     M._customSoundsEventCallback = nil
+    M._customSoundsEventActive = nil
 end)
 
 print(string.format("[rgnSounds] loaded | strict-local events | %d compiled sounds | folder=%s", #soundPaths, tostring(soundDir or "unresolved")))
@@ -8659,6 +8703,10 @@ local armed = false
 local nextSessionPoll, nextListenerRefresh = 0, 0
 local lastSessionKey, sessionEpoch = nil, 0
 
+M._killsayEventActive = function()
+    return armed == true
+end
+
 local function requestKillsayListeners()
     pcall(function()
         if not client or type(client.AllowListener) ~= "function" then return end
@@ -8890,6 +8938,21 @@ local observed, dirtyAt, nextPoll = snapshot(), nil, 0
 local killPollAt, pollCounter, pollCounterKind = 0, nil, nil
 local pollAlive = {}
 
+M._killsayDrawActive = function()
+    -- While the menu is open this keeps setting changes and enable/disable
+    -- transitions immediate. A pending config save also finishes after close;
+    -- otherwise closed + disabled is a true zero-work state.
+    return M._open == true or armed == true or enabled:Get() == true or dirtyAt ~= nil
+end
+
+local function pollKillsayConfig(t)
+    if t < nextPoll then return end
+    nextPoll = t + 0.25
+    local current = snapshot()
+    if current ~= observed then observed, dirtyAt = current, t + 0.8 end
+    if dirtyAt and t >= dirtyAt then saveConfig(); dirtyAt = nil end
+end
+
 local function entityIndex(entity)
     local value
     pcall(function() value = entity:GetIndex() end)
@@ -9037,6 +9100,31 @@ end
 M._killsayDrawCallback = function()
     local t = now()
 
+    local requested = enabled:Get() == true
+    if requested ~= armed then
+        armed = requested
+        pending = {}
+        awaitingChat = nil
+        lastDeathSignature, lastDeathAt = nil, -100
+        resetKillPoll()
+        status = armed and "armed" or "disabled"
+        if armed then
+            -- Refresh immediately when the user enables the module; there is
+            -- no need to keep listener/session polling alive while disabled.
+            requestKillsayListeners()
+            lastSessionKey = currentSessionKey()
+            nextListenerRefresh = t + 2.0
+            nextSessionPoll = t + 0.50
+        end
+        writeRuntime(armed and "enabled by checkbox" or "disabled by checkbox")
+    end
+
+    if not armed then
+        status = "disabled"
+        pollKillsayConfig(t)
+        return
+    end
+
     -- Aimware can clear game-event listener subscriptions while changing maps
     -- or servers even though the Lua remains loaded. Refreshing AllowListener
     -- is idempotent and much cheaper than polling player state every frame.
@@ -9055,22 +9143,6 @@ M._killsayDrawCallback = function()
             requestKillsayListeners()
             resetKillsaySession("session changed: " .. previous .. " -> " .. key)
         end
-    end
-
-    local requested = enabled:Get() == true
-    if requested ~= armed then
-        armed = requested
-        pending = {}
-        awaitingChat = nil
-        lastDeathSignature, lastDeathAt = nil, -100
-        resetKillPoll()
-        status = armed and "armed" or "disabled"
-        writeRuntime(armed and "enabled by checkbox" or "disabled by checkbox")
-    end
-    if not armed then
-        if #pending > 0 then pending = {} end
-        status = "disabled"
-        resetKillPoll()
     end
 
     if awaitingChat and t - awaitingChat.at >= 1.50 then
@@ -9094,13 +9166,6 @@ M._killsayDrawCallback = function()
             lastSentAt, lastVictim, lastMessage, sendMethod, status = t, item.victim or lastVictim, item.text, method, "sent"
             awaitingChat = { text = item.text, at = t }
             print("[rgnKillsay] sent via " .. method .. ": " .. item.text)
-            writeRuntime("queued message sent", {
-                victim = item.victim,
-                message = item.text,
-                method = method,
-                remaining = #pending,
-                interval = delay:Get(),
-            })
         else
             status = "send failed"
             print("[rgnKillsay] send error: " .. tostring(method))
@@ -9115,12 +9180,7 @@ M._killsayDrawCallback = function()
         status = #pending > 0 and "waiting" or "ready"
     end
 
-    if t >= nextPoll then
-        nextPoll = t + 0.25
-        local current = snapshot()
-        if current ~= observed then observed, dirtyAt = current, t + 0.8 end
-        if dirtyAt and t >= dirtyAt then saveConfig(); dirtyAt = nil end
-    end
+    pollKillsayConfig(t)
 end
 
 M._killsayEventCallback = function(event)
@@ -9131,12 +9191,6 @@ M._killsayEventCallback = function(event)
         pcall(function() text = cleanChatText(event:GetString("text")) end)
         if awaitingChat and text ~= "" and text == cleanChatText(awaitingChat.text) then
             chatConfirmed = chatConfirmed + 1
-            writeRuntime("chat confirmed by server", {
-                message = text,
-                confirmed = chatConfirmed,
-                interval = delay:Get(),
-                latency = now() - awaitingChat.at,
-            })
             awaitingChat = nil
         end
         return
@@ -9147,6 +9201,10 @@ M._killsayEventCallback = function(event)
         return
     end
     if eventName ~= "player_death" then return end
+    -- With Killsay disabled, deaths must be a true zero-work path. The stable
+    -- build used to open/write its diagnostics file twice for every death in
+    -- the server even though no message could be sent.
+    if not armed then return end
     callbackEvents = callbackEvents + 1
 
     -- Current CS2/Aimware exposes player_controller_and_pawn event members
@@ -9157,36 +9215,11 @@ M._killsayEventCallback = function(event)
     pcall(function() victimPawnHandle = tonumber(event:GetInt("userid_pawn")) end)
     local attackerPawnIndex = pawnHandleIndex(attackerPawnHandle)
     local victimPawnIndex = pawnHandleIndex(victimPawnHandle)
-    local rawAttacker, rawVictim, traceLocalPawn, traceLocalClient
+    local rawAttacker, rawVictim
     pcall(function() rawAttacker = tonumber(event:GetInt("attacker")) end)
     pcall(function() rawVictim = tonumber(event:GetInt("userid")) end)
-    pcall(function()
-        local pawn = entities.GetLocalPlayer()
-        if pawn then traceLocalPawn = entityIndex(pawn) end
-    end)
-    pcall(function() traceLocalClient = tonumber(client.GetLocalPlayerIndex()) end)
-    writeRuntime("player_death received", {
-        attacker_handle = attackerPawnHandle,
-        userid_handle = victimPawnHandle,
-        attacker_pawn = attackerPawnIndex,
-        userid_pawn = victimPawnIndex,
-        attacker = rawAttacker,
-        userid = rawVictim,
-        local_pawn = traceLocalPawn,
-        local_client = traceLocalClient,
-    })
-    if not armed then
-        writeRuntime("player_death ignored: not armed", {
-            attacker_handle = attackerPawnHandle,
-            userid_handle = victimPawnHandle,
-            attacker_pawn = attackerPawnIndex,
-            userid_pawn = victimPawnIndex,
-        })
-        return
-    end
     if attackerPawnIndex and attackerPawnIndex > 0 and victimPawnIndex and victimPawnIndex > 0 then
         if attackerPawnIndex == victimPawnIndex then
-            writeRuntime("player_death ignored: suicide", { attacker_pawn = attackerPawnIndex, userid_pawn = victimPawnIndex })
             return
         end
 
@@ -9215,19 +9248,9 @@ M._killsayEventCallback = function(event)
             if attackerName ~= "" and localName ~= "" and attackerName == localName then isLocal = true end
         end
         if not isLocal then
-            writeRuntime("player_death ignored: attacker is not local", {
-                attacker_pawn = attackerPawnIndex,
-                userid_pawn = victimPawnIndex,
-                attacker_handle = attackerPawnHandle,
-                userid_handle = victimPawnHandle,
-                local_pawn = localPawnIndex,
-                local_client = localClientIndex,
-                attacker_entity = attackerEntityIndex,
-            })
             return
         end
         if localPawnIndex and (victimPawnIndex == localPawnIndex or victimEntityIndex == localPawnIndex) then
-            writeRuntime("player_death ignored: victim is local", { attacker_pawn = attackerPawnIndex, userid_pawn = victimPawnIndex, local_pawn = localPawnIndex })
             return
         end
 
@@ -9245,15 +9268,6 @@ M._killsayEventCallback = function(event)
         lastDeathSignature, lastDeathAt = signature, eventTime
         deathEvents, localKills = deathEvents + 1, localKills + 1
         queueForVictim(victimName)
-        writeRuntime("player_death queued", {
-            attacker_pawn = attackerPawnIndex,
-            userid_pawn = victimPawnIndex,
-            attacker_handle = attackerPawnHandle,
-            userid_handle = victimPawnHandle,
-            local_pawn = localPawnIndex,
-            victim = victimName,
-            queued = #pending,
-        })
         return
     end
 
@@ -9312,17 +9326,6 @@ M._killsayEventCallback = function(event)
         if attackerName ~= "" and localName ~= "" and attackerName == localName then isLocal = true end
     end
     if not isLocal then
-        writeRuntime("legacy player_death ignored: attacker is not local", {
-            attacker = attackerID,
-            userid = victimID,
-            attacker_entry = attackerEntry,
-            userid_entry = victimEntry,
-            attacker_index = attackerIndex,
-            victim_index = victimIndex,
-            local_client = localIndex,
-            local_pawn = localPawnIndex,
-            local_controller = localControllerIndex,
-        })
         return
     end
     if victimIndex == localIndex then return end
@@ -9330,13 +9333,6 @@ M._killsayEventCallback = function(event)
     localKills = localKills + 1
     local legacyVictim = playerName(victimID, victimIndex or victimID % 32768)
     queueForVictim(legacyVictim)
-    writeRuntime("legacy player_death queued", {
-        attacker = attackerID,
-        userid = victimID,
-        local_client = localIndex,
-        victim = legacyVictim,
-        queued = #pending,
-    })
 end
 
 requestKillsayListeners()
@@ -9724,7 +9720,16 @@ rawset(_G, "RGN_IDENTITY_GENERATION", generation)
 
 local function identityDraw()
     if rawget(_G, "RGN_IDENTITY_GENERATION") ~= generation then return end
+    local wantsIdentity = nameEnabled:Get() or clanEnabled:Get()
+    -- The stable callback kept polling the server/map clock while identity was
+    -- completely idle. If we do not own a changed name there is nothing to
+    -- restore, so return before clock/session/API work.
+    if not wantsIdentity and not changed then return end
     local t = clock()
+    if not wantsIdentity then
+        if captured and t - lastWriteAt >= MIN_WRITE_INTERVAL then restoreOriginal(false) end
+        return
+    end
     if t >= nextSessionPoll then
         nextSessionPoll = t + 0.75
         local key = sessionKey()
@@ -9738,11 +9743,6 @@ local function identityDraw()
         end
     end
 
-    local wantsIdentity = nameEnabled:Get() or clanEnabled:Get()
-    if not wantsIdentity then
-        if changed and captured and t - lastWriteAt >= MIN_WRITE_INTERVAL then restoreOriginal(false) end
-        return
-    end
     if t - initAt < 1.0 then return end
     if not captureOriginal() then status = "waiting for local player"; return end
 
@@ -10531,10 +10531,7 @@ local function sendQueued(t)
     end
 end
 
-local function voteLogicTick()
-    local t = clock()
-    if t < nextLogicTick then return end
-    nextLogicTick = t + 0.05
+local function voteLogicTick(t)
     if t >= nextListenerRefresh then
         nextListenerRefresh = t + 2.0
         requestListeners()
@@ -10562,8 +10559,14 @@ rawset(_G, "RGN_VOTE_RUNTIME_GENERATION", runtimeGeneration)
 local logicBusy = false
 callbacks.Register("CreateMove", "rgnMultitool_VoteLogic", function()
     if rawget(_G, "RGN_VOTE_RUNTIME_GENERATION") ~= runtimeGeneration or logicBusy then return end
+    -- Gate before pcall: CreateMove may exceed 100 Hz while vote/session work
+    -- intentionally runs at 20 Hz. This keeps identical service cadence while
+    -- avoiding protected-call overhead on commands that would return anyway.
+    local t = clock()
+    if t < nextLogicTick then return end
+    nextLogicTick = t + 0.05
     logicBusy = true
-    local ok, err = pcall(voteLogicTick)
+    local ok, err = pcall(voteLogicTick, t)
     if not ok then writeRuntime("logic callback error", { error = tostring(err) }) end
     logicBusy = false
 end)
@@ -10593,8 +10596,8 @@ do
     local bridgeKey = "RGN_MULTITOOL_EVENT_BRIDGE_V1"
     local dispatchBusy = false
     local handlers = {
-        { field = "_killsayEventCallback", label = "Killsay" },
-        { field = "_customSoundsEventCallback", label = "Sounds" },
+        { field = "_killsayEventCallback", active = "_killsayEventActive", label = "Killsay" },
+        { field = "_customSoundsEventCallback", active = "_customSoundsEventActive", label = "Sounds" },
         { field = "_voteEventCallback", label = "Votes" },
     }
 
@@ -10604,7 +10607,9 @@ do
         for i = 1, #handlers do
             local entry = handlers[i]
             local handler = M[entry.field]
-            if type(handler) == "function" then
+            local active = entry.active and M[entry.active] or nil
+            if type(handler) == "function"
+                and (type(active) ~= "function" or active()) then
                 local ok, err = pcall(handler, event)
                 if not ok then
                     print(string.format("[rgnMultitool] %s event error: %s", entry.label, tostring(err)))
@@ -10651,7 +10656,9 @@ do
             current.registered = false
         end
         M._killsayEventCallback = nil
+        M._killsayEventActive = nil
         M._customSoundsEventCallback = nil
+        M._customSoundsEventActive = nil
         M._voteEventCallback = nil
         dispatchBusy = false
         pcall(callbacks.Unregister, "Unload", unloadId)

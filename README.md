@@ -54,6 +54,10 @@ Source-visible Aimware Lua toolkit for CS2. Every module lives in one compact me
 ### Reliability
 
 - Event-driven cosmetic engine with sparse maintenance work for reduced frame-time impact.
+- Disabled Killsay, Custom Sounds, Movement, Scope Overlay, left-hand knife and Identity paths now short-circuit before protected callbacks, entity work or session polling.
+- Killsay no longer writes diagnostic files for unrelated server deaths; runtime files are reserved for state transitions, send failures and actionable diagnostics.
+- Vote logic preserves its 20 Hz service cadence while avoiding protected-call overhead on intermediate `CreateMove` commands.
+- Runtime overlay dispatch is allocated once at startup instead of creating a temporary closure every rendered frame.
 - Automatic session rearming when joining another server or changing maps.
 - Local configuration files only; no user-specific Windows paths are embedded.
 - Built-in update check with source-size, signature, version and Lua syntax validation.

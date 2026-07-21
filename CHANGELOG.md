@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.3.1 - 2026-07-21
+
+### Idle-path and event-dispatch performance update
+
+- Preserved the complete v1.3.0 cosmetics, agents, custom characters, viewmodel, movement, Killsay, vote, custom-sound and scope behavior without changing their visible timing.
+- Added zero-work gates for disabled Killsay, Custom Sounds, Movement, Scope Overlay, left-hand knife and inactive Identity paths.
+- Removed per-frame Killsay state-table recreation and stopped writing diagnostics for unrelated server deaths or successful routine messages.
+- Kept Killsay configuration persistence active while the menu is open and until any pending save finishes, then fully suspends its disabled runtime path.
+- Moved the runtime overlay dispatcher outside the main Draw callback so it is allocated once instead of once per rendered frame.
+- Kept vote logic at 20 Hz while moving its throttle before the protected call, avoiding redundant `pcall` work on high-frequency `CreateMove` commands.
+- Added event-handler activity gates so disabled Killsay and Custom Sounds do not receive every game event through the shared bridge.
+- Left the weapon engine at 20 Hz, sparse mesh maintenance at one second, custom-character spawn watcher at eight commands and scope-state detection at 20 Hz.
+
 ## 1.3.0 - 2026-07-19
 
 ### Polished scope overlay and strict-local custom sounds
