@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.3.2 - 2026-07-21
+
+### Refined interface and primary loader
+
+- Replaced the embedded Base64 PNG logo and its decoder with a compact native `RGN` monogram rendered through Aimware's documented drawing API.
+- Reduced the minimized header footprint while preserving the existing menu layout, drag behavior and expand control.
+- Consolidated stale callback cleanup and shortened startup diagnostics without changing module behavior or runtime timing.
+- Removed unused UI bootstrap state and repetitive successful module messages; actionable errors remain visible in the Aimware console.
+- Kept the embedded weapon engine byte-for-byte identical to 1.3.1.
+- Established `loader.lua` as the only recommended installation and autorun entry point while keeping the complete source public for review.
+- Updated the loader to prefer Aimware's documented `file.Read` and `file.Write` helpers with the existing handle-based fallback for compatibility.
+
 ## 1.3.1 - 2026-07-21
 
 ### Idle-path and event-dispatch performance update

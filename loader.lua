@@ -1,6 +1,7 @@
--- rgnMultitool loader/update client for Aimware CS2.
--- Public source: https://github.com/ragnarokcs/rgnMultitool
+-- Primary rgnMultitool entry point for Aimware CS2.
+-- Source: https://github.com/ragnarokcs/rgnMultitool
 
+local LOADER_VERSION = "1.1.0"
 local USER = "ragnarokcs"
 local REPO = "rgnMultitool"
 local BRANCH = "main"
@@ -12,6 +13,10 @@ local EXPECTED_SIGNATURE = "RGN_MULTITOOL_SOURCE_V1"
 local DEFAULT_MIN_BYTES = 250000
 
 local function readFile(path)
+    if type(file) == "table" and type(file.Read) == "function" then
+        local ok, data = pcall(file.Read, path)
+        if ok and type(data) == "string" then return data end
+    end
     local data
     pcall(function()
         local f = file.Open(path, "r")
@@ -21,6 +26,10 @@ local function readFile(path)
 end
 
 local function writeFile(path, data)
+    if type(file) == "table" and type(file.Write) == "function" then
+        local ok = pcall(file.Write, path, data)
+        if ok then return true end
+    end
     local ok = false
     pcall(function()
         local f = file.Open(path, "w")
@@ -88,7 +97,11 @@ local function downloadRelease(manifest)
     return source, chunk
 end
 
-local updater = { current_version = nil, remote_version = nil }
+local updater = {
+    loader_version = LOADER_VERSION,
+    current_version = nil,
+    remote_version = nil,
+}
 
 function updater.check()
     local manifestText = fetch(BASE .. "version.txt", 16)
@@ -138,11 +151,11 @@ if not chunk then
 end
 
 if not chunk then
-    print("[rgnMultitool loader] FATAL: no valid server release or offline cache")
+    print("[rgn loader] no valid release or offline cache")
     return
 end
 
 updater.current_version = source:match('local RGN_MULTITOOL_VERSION = "([^"]+)"') or "unknown"
-print(string.format("[rgnMultitool loader] v%s from %s", updater.current_version, tostring(where)))
+print(string.format("[rgn loader] v%s from %s", updater.current_version, tostring(where)))
 local ok, err = pcall(chunk)
-if not ok then print("[rgnMultitool loader] run error: " .. tostring(err)) end
+if not ok then print("[rgn loader] " .. tostring(err)) end
