@@ -1,12 +1,83 @@
-# rgnMultitool
+<p align="center">
+  <img src="assets/rgnmultitool-banner.png" alt="rgnMULTITOOL — Aimware Lua Toolkit — Created and owned by ragnarokcs" width="100%">
+</p>
 
-Source-visible Aimware Lua toolkit for CS2. Every module lives in one compact menu and optional gameplay modules start disabled.
+<h1 align="center">rgnMultitool</h1>
+
+<p align="center">
+  <strong>Source-visible Aimware Lua toolkit for CS2.</strong><br>
+  Every module lives in one compact menu and optional gameplay modules start disabled.
+</p>
+
+<p align="center">
+  <img alt="Lua" src="https://img.shields.io/badge/Lua-Aimware-43A9FF?style=flat-square">
+  <img alt="Platform" src="https://img.shields.io/badge/Platform-CS2-43A9FF?style=flat-square">
+  <img alt="Source" src="https://img.shields.io/badge/Source-Visible-43A9FF?style=flat-square">
+  <img alt="Owner" src="https://img.shields.io/badge/Owner-ragnarokcs-43A9FF?style=flat-square">
+</p>
 
 ## Download
 
 [**Download `loader.lua`**](https://raw.githubusercontent.com/ragnarokcs/rgnMultitool/main/loader.lua)
 
 `loader.lua` is the primary and recommended entry point. It validates and runs the current public source, keeps a last-known-good offline cache and downloads the full Lua again only when `version.txt` changes. `rgnMultitool.lua` remains available for source review and development; regular users do not need to install it manually.
+
+## Interface preview
+
+Click any preview to open the full-size image.
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <a href="assets/previews/weapons.png"><img src="assets/previews/weapons.png" alt="Weapons module preview" width="100%"></a>
+      <p><strong>Weapons</strong><br>Browse weapons, knives and gloves, select finishes, tune wear and seed, and save the setup.</p>
+    </td>
+    <td width="50%" valign="top">
+      <a href="assets/previews/agents.png"><img src="assets/previews/agents.png" alt="Agents module preview" width="100%"></a>
+      <p><strong>Agents</strong><br>Select and persist official Terrorist and Counter-Terrorist agents.</p>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <a href="assets/previews/custom-skins.png"><img src="assets/previews/custom-skins.png" alt="Custom character skins module preview" width="100%"></a>
+      <p><strong>Custom Skins</strong><br>Discover compatible character models from the local <code>csgo/characters</code> directory.</p>
+    </td>
+    <td width="50%" valign="top">
+      <a href="assets/previews/viewmodel.png"><img src="assets/previews/viewmodel.png" alt="Viewmodel module preview" width="100%"></a>
+      <p><strong>Viewmodel</strong><br>Adjust X, Y and Z positioning, apply presets and optionally keep the knife in the left hand.</p>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <a href="assets/previews/scope-overlay.png"><img src="assets/previews/scope-overlay.png" alt="Scope overlay in game" width="100%"></a>
+      <p><strong>Scope Overlay</strong><br>Use the lightweight luminous sniper overlay with a configurable color and separated center point.</p>
+    </td>
+    <td width="50%" valign="top">
+      <a href="assets/previews/custom-sounds.png"><img src="assets/previews/custom-sounds.png" alt="Custom sounds module preview" width="100%"></a>
+      <p><strong>Custom Sounds</strong><br>Choose local hit and kill sounds, preview them and control each volume independently.</p>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <a href="assets/previews/movement.png"><img src="assets/previews/movement.png" alt="Movement module preview" width="100%"></a>
+      <p><strong>Movement</strong><br>Optional velocity display, jump trail, edge-bug helper and W/A/S/D null-bind resolver.</p>
+    </td>
+    <td width="50%" valign="top">
+      <a href="assets/previews/identity.png"><img src="assets/previews/identity.png" alt="Identity module preview" width="100%"></a>
+      <p><strong>Identity</strong><br>Configure custom player-name and clan-prefix behavior independently.</p>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <a href="assets/previews/killsay.png"><img src="assets/previews/killsay.png" alt="Killsay module preview" width="100%"></a>
+      <p><strong>Killsay</strong><br>Select a language pack, message order, interval and optional victim-name template.</p>
+    </td>
+    <td width="50%" valign="top">
+      <a href="assets/previews/configs.png"><img src="assets/previews/configs.png" alt="Configs module preview" width="100%"></a>
+      <p><strong>Configs</strong><br>Reapply the automatic setup, manage named profiles and check for validated updates.</p>
+    </td>
+  </tr>
+</table>
 
 ## Features
 
@@ -92,7 +163,7 @@ If GitHub is unavailable, the last validated cache is used. The source is intent
 
 ## Credits
 
-Built by **ragnarokcs**. The project was developed with API and implementation references from the Aimware Lua documentation, `cachorropacoca/aw_cs2v6_femboytap`, `mahanneo/SkinChanger_aw_v6`, public Aimware Lua examples and community research. See `NOTICE.md`.
+Created and owned by **ragnarokcs**. The project was developed with API and implementation references from the Aimware Lua documentation, `cachorropacoca/aw_cs2v6_femboytap`, `mahanneo/SkinChanger_aw_v6`, public Aimware Lua examples and community research. See `NOTICE.md`.
 
 ## Disclaimer
 
