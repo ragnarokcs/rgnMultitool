@@ -11400,8 +11400,11 @@ tab:Col()
 local controlSection = tab:Section("Whitelist control")
 local whitelistEnabled = controlSection:Checkbox("Enable whitelist", false)
 local forceAll = controlSection:Checkbox("Ignore whitelist / target everyone", false)
+-- The original whitelist stored its state by C_CSPlayerPawn index.  Ragebot
+-- and DrawESP both receive that pawn, whereas a CCSPlayerController can keep
+-- a different index after a respawn or side change.  Keep the same identity
+-- end-to-end so the UI state and the actual target are always identical.
 local protectedByIndex, rowsBySelection, knownEntities = {}, {}, {}
-local keyByPawnIndex = {}
 local refreshRequested = true
 local lastEnabled = false
 local detectionStatus = "Waiting for a match"
@@ -11453,29 +11456,13 @@ local function controllerPawn(controller)
 end
 
 local function setImmortal(entity, value)
-    if not entity then return false end
-    local verified = false
-    local desired = value and true or false
-    local function matches(readback)
-        if type(readback) == "number" then return (readback ~= 0) == desired end
-        return readback == desired
-    end
+    if not entity then return end
     pcall(function()
         local current = entity:GetFieldBool("m_bGunGameImmunity")
-        if current == nil then return end
-        -- Keep the same unconditional write used by the original whitelist.
-        entity:SetFieldBool(desired, "m_bGunGameImmunity")
-        local readback = entity:GetFieldBool("m_bGunGameImmunity")
-        verified = matches(readback)
+        if current ~= nil and current ~= (value and true or false) then
+            entity:SetFieldBool(value and true or false, "m_bGunGameImmunity")
+        end
     end)
-    if not verified then
-        pcall(function()
-            entity:SetPropBool(desired, "m_bGunGameImmunity")
-            local readback = entity:GetPropBool("m_bGunGameImmunity")
-            verified = matches(readback)
-        end)
-    end
-    return verified
 end
 
 local function cleanupImmortalStates()
@@ -11557,52 +11544,19 @@ end
 local function applyState(entity, index)
     local enabledNow = whitelistEnabled:Get() == true
     local protected = enabledNow and forceAll:Get() ~= true and protectedByIndex[index] == true
-    local verified = setImmortal(entity, protected)
-    return protected, verified
+    setImmortal(entity, protected)
+    return protected
 end
 
 local function refreshPlayers()
     local current, rows = {}, {}
-    keyByPawnIndex = {}
-    local localController, localClientIndex
-    pcall(function() localClientIndex = tonumber(client.GetLocalPlayerIndex()) end)
-    local controllers = safeCall(function() return entities.FindByClass("CCSPlayerController") end, {}) or {}
-    for i = 1, #controllers do
-        local controller = controllers[i]
-        if fieldBool(controller, "m_bIsLocalPlayerController") or entityIndex(controller) == localClientIndex then
-            localController = controller
-            break
-        end
-    end
     local pawn = localPawn()
-    local team = entityTeam(localController) or entityTeam(pawn)
+    local team = entityTeam(pawn)
+    local pawns = safeCall(function() return entities.FindByClass("C_CSPlayerPawn") end, {}) or {}
 
-    -- Controllers are authoritative in CS2 and include humans, bots and
-    -- dormant players even when their pawn is being recreated on respawn.
-    if type(team) == "number" and #controllers > 0 then
-        for i = 1, #controllers do
-            local controller = controllers[i]
-            local index = entityIndex(controller)
-            local otherTeam = entityTeam(controller)
-            if controller ~= localController and index and type(otherTeam) == "number"
-                and otherTeam ~= team and otherTeam >= 2 and otherTeam <= 3 then
-                local entity = controllerPawn(controller)
-                if protectedByIndex[index] == nil then protectedByIndex[index] = false end
-                current[index] = entity or false
-                if entity then
-                    local pawnIndex = entityIndex(entity)
-                    if pawnIndex then keyByPawnIndex[pawnIndex] = index end
-                    if whitelistEnabled:Get() == true then applyState(entity, index) end
-                end
-                rows[#rows + 1] = { index = index, entity = entity, controller = controller, name = playerName(entity, controller) }
-            end
-        end
-    end
-
-    -- Exact fallback used by the original working whitelist.lua for builds
-    -- that do not expose CCSPlayerController to Lua.
-    if #rows == 0 and type(team) == "number" then
-        local pawns = safeCall(function() return entities.FindByClass("C_CSPlayerPawn") end, {}) or {}
+    -- This is intentionally the original whitelist enumeration path.  It is
+    -- the only source used for the row key and for the immunity write below.
+    if type(team) == "number" then
         for i = 1, #pawns do
             local entity = pawns[i]
             if isEnemy(entity, team) then
@@ -11610,15 +11564,14 @@ local function refreshPlayers()
                 if index then
                     if protectedByIndex[index] == nil then protectedByIndex[index] = false end
                     current[index] = entity
-                    keyByPawnIndex[index] = index
-                    if whitelistEnabled:Get() == true then applyState(entity, index) end
+                    applyState(entity, index)
                     rows[#rows + 1] = { index = index, entity = entity, name = playerName(entity) }
                 end
             end
         end
     end
-    detectionStatus = string.format("Detected: %d | controllers: %d | team: %s",
-                                    #rows, #controllers, tostring(team or "?"))
+    detectionStatus = string.format("Detected: %d | pawns: %d | team: %s",
+                                    #rows, #pawns, tostring(team or "?"))
     if whitelistEnabled:Get() == true then
         local protectedCount = 0
         if forceAll:Get() ~= true then
@@ -11672,17 +11625,17 @@ controlSection:Button("Toggle selected protection", function()
     if not row then M:Notify("select an enemy first", "info"); return end
     protectedByIndex[row.index] = not (protectedByIndex[row.index] == true)
     applyState(row.entity, row.index)
-    refreshRequested = true
+    refreshPlayers()
 end)
 controlSection:Button("Protect every enemy", function()
     forceAll:Set(false)
     for index in pairs(knownEntities) do protectedByIndex[index] = true end
-    refreshRequested = true
+    refreshPlayers()
 end)
 controlSection:Button("Target every enemy", function()
     forceAll:Set(false)
     for index in pairs(knownEntities) do protectedByIndex[index] = false end
-    refreshRequested = true
+    refreshPlayers()
 end)
 
 local statusSection = tab:Section("Selected player")
@@ -11721,18 +11674,37 @@ local function whitelistRuntime()
     local t = clock()
     if refreshRequested or t >= nextRefresh then
         refreshRequested = false
-        -- Controllers/pawns change on spawn or team swap; half a second is
-        -- responsive enough while avoiding per-frame immunity writes.
-        nextRefresh = t + 0.50
+        nextRefresh = t + 0.35
         refreshPlayers()
     end
 end
-M._whitelistDrawCallback = whitelistRuntime
-M._whitelistDrawActive = function()
-    return whitelistEnabled:Get() == true or M._open == true or refreshRequested == true
+callbacks.Register("Draw", "rgnMultitool_WhitelistRefresh", whitelistRuntime)
+
+-- DrawESP owns the label, but Ragebot can resolve a target before that draw
+-- pass.  Mirror the exact pawn state from CreateMove as well, so a click on
+-- any whitelist action is effective for the very next target calculation.
+local function whitelistCommand()
+    if whitelistEnabled:Get() ~= true then return end
+    local pawn = localPawn()
+    local team = entityTeam(pawn)
+    if type(team) ~= "number" then return end
+    local pawns = safeCall(function() return entities.FindByClass("C_CSPlayerPawn") end, {}) or {}
+    for i = 1, #pawns do
+        local entity = pawns[i]
+        if isEnemy(entity, team) then
+            local index = entityIndex(entity)
+            if index then
+                if protectedByIndex[index] == nil then
+                    protectedByIndex[index] = false
+                    refreshRequested = true
+                end
+                applyState(entity, index)
+            end
+        end
+    end
 end
-M._whitelistCommandCallback = nil
-M._whitelistCommandActive = nil
+M._whitelistCommandCallback = whitelistCommand
+M._whitelistCommandActive = function() return whitelistEnabled:Get() == true end
 refreshPlayers()
 
 callbacks.Register("DrawESP", "rgnMultitool_WhitelistESP", function(esp)
@@ -11744,9 +11716,8 @@ callbacks.Register("DrawESP", "rgnMultitool_WhitelistESP", function(esp)
     if not isEnemy(entity, team) or safeCall(function() return entity:IsAlive() end, false) ~= true then return end
     local pawnIndex = entityIndex(entity)
     if not pawnIndex then return end
-    local key = keyByPawnIndex[pawnIndex] or pawnIndex
-    if protectedByIndex[key] == nil then protectedByIndex[key] = false; refreshRequested = true end
-    local protected = whitelistEnabled:Get() == true and forceAll:Get() ~= true and protectedByIndex[key] == true
+    if protectedByIndex[pawnIndex] == nil then protectedByIndex[pawnIndex] = false; refreshRequested = true end
+    local protected = applyState(entity, pawnIndex)
     local color = protected and protectedColor:Get() or targetColor:Get()
     if type(color) ~= "table" then color = protected and { 76, 201, 156, 255 } or { 255, 166, 74, 255 } end
     pcall(function() esp:Color(unpack(color)) end)
@@ -11755,10 +11726,10 @@ end)
 
 callbacks.Register("Unload", "rgnMultitool_WhitelistUnload", function()
     cleanupImmortalStates()
+    pcall(callbacks.Unregister, "Draw", "rgnMultitool_WhitelistRefresh")
     pcall(callbacks.Unregister, "DrawESP", "rgnMultitool_WhitelistESP")
-    if M._whitelistDrawCallback == whitelistRuntime then M._whitelistDrawCallback = nil end
-    M._whitelistCommandCallback = nil
-    M._whitelistDrawActive, M._whitelistCommandActive = nil, nil
+    if M._whitelistCommandCallback == whitelistCommand then M._whitelistCommandCallback = nil end
+    M._whitelistCommandActive = nil
 end)
 end)
 

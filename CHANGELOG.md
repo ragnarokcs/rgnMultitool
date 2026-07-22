@@ -7,6 +7,7 @@
 - Added a **Region** module that reads CS2's public Steam relay-latency interface, lists recognized relays in latency order and applies one or more selected relays through the official matchmaking setting. The best measured selected relay is forced when more than one is chosen.
 - Added local relay latency presentation with a green-to-yellow-to-red range, automatic background probing, concise status text and a compact multi-select UI.
 - Added a **Whitelist** module that discovers current enemies, starts them as valid targets, and lets the user protect individual players or all enemies from the local targeting path.
+- Restored the Whitelist's live pawn-level enforcement: target/protected changes now update the roster immediately and are applied before local target selection, including after respawns and team changes.
 - Integrated the existing **Manual AA** controls with Aimware's native Anti-Aim settings, including left, right and forward directions plus compact optional on-screen indicators.
 - Reworked the navigation typography and header wordmark: the `RGN` mark is centered, module labels use clearer title case, and all long control, dropdown and status labels now stay inside their panel boundaries.
 - Preserved the existing cosmetics, agents, custom characters, custom sounds, scope overlay, movement, identity, Killsay and vote modules.

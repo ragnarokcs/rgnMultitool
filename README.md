@@ -104,7 +104,7 @@ Click any preview to open the full-size image.
 - Manual AA directions are available through Aimware's native **Ragebot > Anti-Aim** controls, with optional compact on-screen direction indicators.
 - The **Region** module reads CS2's public Steam relay latency data, orders recognized relays from lowest to highest measured latency and uses a green-to-yellow-to-red latency range.
 - Select one or more relays and apply the preference; when multiple relays are selected, the lowest measured latency is used for the official relay preference.
-- The **Whitelist** module refreshes the active enemy roster on joins, spawns and team changes. Enemies begin as valid targets; selected players can be protected locally from targeting.
+- The **Whitelist** module refreshes the active enemy roster on joins, spawns and team changes. Enemies begin as valid targets; selected players can be protected locally from targeting, with the target state applied immediately after every UI change.
 
 ### Scope overlay
 
