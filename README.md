@@ -99,6 +99,13 @@ Click any preview to open the full-size image.
 - W/A/S/D null-bind resolver.
 - Movement features are opt-in and disabled by default.
 
+### Manual AA, region and whitelist
+
+- Manual AA directions are available through Aimware's native **Ragebot > Anti-Aim** controls, with optional compact on-screen direction indicators.
+- The **Region** module reads CS2's public Steam relay latency data, orders recognized relays from lowest to highest measured latency and uses a green-to-yellow-to-red latency range.
+- Select one or more relays and apply the preference; when multiple relays are selected, the lowest measured latency is used for the official relay preference.
+- The **Whitelist** module refreshes the active enemy roster on joins, spawns and team changes. Enemies begin as valid targets; selected players can be protected locally from targeting.
+
 ### Scope overlay
 
 - Optional Neverlose-inspired sniper overlay with pointed arms, a separated luminous center dot and configurable color.
@@ -136,6 +143,7 @@ Click any preview to open the full-size image.
 - Vote logic preserves its 20 Hz service cadence while avoiding protected-call overhead on intermediate `CreateMove` commands.
 - Runtime overlay dispatch is allocated once at startup instead of creating a temporary closure every rendered frame.
 - Automatic session rearming when joining another server or changing maps.
+- Region probing is bounded and low-frequency; latency refreshes happen at load, on explicit reload and while Steam is still preparing relay samples, never every frame.
 - Local configuration files only; no user-specific Windows paths are embedded.
 - Built-in update check with source-size, signature, version and Lua syntax validation.
 
