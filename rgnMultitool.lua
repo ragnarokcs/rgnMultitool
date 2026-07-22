@@ -1,9 +1,9 @@
--- rgnMultitool 1.3.2
-local RGN_MULTITOOL_VERSION = "1.3.2"
+-- rgnMultitool 1.4.0
+local RGN_MULTITOOL_VERSION = "1.4.0"
 local RGN_MULTITOOL_SIGNATURE = "RGN_MULTITOOL_SOURCE_V1"
 _G.RGN_MULTITOOL_VERSION = RGN_MULTITOOL_VERSION
 
-local staleEvents = { "Draw", "CreateMove", "FireGameEvent", "Unload" }
+local staleEvents = { "Draw", "CreateMove", "PreMove", "DrawESP", "FireGameEvent", "Unload" }
 local function clearCallbacks(ids)
     for _, id in ipairs(ids) do
         for _, event in ipairs(staleEvents) do
@@ -26,6 +26,8 @@ if type(UnloadScript) == "function" then
     pcall(UnloadScript, "rgnSkins.lua")
     pcall(UnloadScript, "rgnMisc.lua")
     pcall(UnloadScript, "rgnWEAPONS.lua")
+    pcall(UnloadScript, "manual_aa.lua")
+    pcall(UnloadScript, "whitelist.lua")
 end
 
 clearCallbacks({
@@ -35,7 +37,11 @@ clearCallbacks({
     "rgnMISC_Logic", "rgnMISC_Events", "rgnMISC_Unload",
     "rgnWEAPONS_UIDraw", "rgnWEAPONS_UIInput", "rgnWEAPONS_UIUnload",
     "rgnWEAPONS_Engine", "rgnWEAPONS_Unload", "rgnWEAPONS_Watermark",
-    "rgnWEAPONS_LateMesh"
+    "rgnWEAPONS_LateMesh",
+    "rgnMultitool_ManualAADraw", "rgnMultitool_ManualAAMove",
+    "rgnMultitool_ManualAAUnload", "rgnMultitool_WhitelistRefresh",
+    "rgnMultitool_WhitelistESP", "rgnMultitool_WhitelistUnload",
+    "rgnMultitool_RegionDraw", "rgnMultitool_RegionUnload"
 })
 
 local __RGN_GUILIB = [===[
@@ -151,10 +157,12 @@ local function drawLogo(x, y, w, h)
         if FONT_LOGO then draw.SetFont(FONT_LOGO) end
         local label = "RGN"
         local tw, th = draw.GetTextSize(label)
-        draw.Color(T.accent[1], T.accent[2], T.accent[3], rnd(220 * ALPHA))
-        draw.OutlinedRect(rnd(x), rnd(y), rnd(x + w), rnd(y + h))
+        -- This runs before the rounded-box helpers are declared.  Keep the
+        -- wordmark self-contained so it cannot silently fail during startup.
         draw.Color(T.texthi[1], T.texthi[2], T.texthi[3], rnd(255 * ALPHA))
         draw.Text(rnd(x + (w - tw) * 0.5), rnd(y + (h - th) * 0.5 - 1), label)
+        draw.Color(T.accent[1], T.accent[2], T.accent[3], rnd(235 * ALPHA))
+        draw.FilledRect(rnd(x), rnd(y + h - 2), rnd(x + w), rnd(y + h))
     end)
     return ok
 end
@@ -718,7 +726,18 @@ function Section:_widget(wd, x, y, w)
         wd._h = approach(wd._h or 0, (hov or open) and 1 or 0, 16)
         text(x, y, lerpc(T.text, T.texthi, wd._h), wd.label, FONT)
         rbox(x, by, w, bh, 5, lerpc(T.widget, T.widgethi, wd._h), open and T.accent or T.border)
-        text(x + 9, by + 5, open and T.texthi or lerpc(T.text, T.texthi, wd._h), wd.options[wd.value] or "?", FONT)
+        local shown = wd.options[wd.value] or "?"
+        local selectedColor = wd.optionColors and wd.optionColors[wd.value]
+        local suffix = wd.optionSuffixes and wd.optionSuffixes[wd.value]
+        local normalColor = open and T.texthi or lerpc(T.text, T.texthi, wd._h)
+        local available = mmax(20, w - 28)
+        if suffix and selectedColor and shown:sub(-#suffix) == suffix then
+            local prefix = fitText(shown:sub(1, #shown - #suffix), mmax(0, available - textw(suffix)), FONT)
+            text(x + 9, by + 5, normalColor, prefix, FONT)
+            text(x + 9 + textw(prefix), by + 5, selectedColor, suffix, FONT)
+        else
+            text(x + 9, by + 5, normalColor, fitText(shown, available, FONT), FONT)
+        end
         text(x + w - 16, by + 5, open and T.accent or T.textdim, open and "-" or "v", FONT)
         if clicked(x, by, w, bh) then M._combo = open and nil or wd end
         if M._combo == wd then M._dd = { wd = wd, x = x, y = by + bh, w = w, bh = bh } end
@@ -733,6 +752,7 @@ function Section:_widget(wd, x, y, w)
         local parts, count = {}, 0
         for i, o in ipairs(wd.options) do if wd.value[i] then count = count + 1; parts[#parts + 1] = o end end
         local shown = count == 0 and "None" or (count > 2 and (count .. " selected") or table.concat(parts, ", "))
+        shown = fitText(shown, mmax(20, w - 28), FONT)
         text(x + 9, by + 5, open and T.texthi or lerpc(T.text, T.texthi, wd._h), shown, FONT)
         text(x + w - 16, by + 5, open and T.accent or T.textdim, open and "-" or "v", FONT)
         if clicked(x, by, w, bh) then M._combo = open and nil or wd end
@@ -909,7 +929,11 @@ function UI.colorpicker(id, def)
     imEmit(wd); return wd.value
 end
 function UI.label(s, col)
-    text(UI._x, UI._cy, col or T.text, tostring(s), FONT); UI._cy = UI._cy + 18
+    -- Custom panels share the same fixed content width as normal widgets.
+    -- Keep informational text inside that width instead of letting a long
+    -- relay/player name bleed into the neighbouring column.
+    local shown = fitText(tostring(s), mmax(20, (UI._w or 200) - 2), FONT)
+    text(UI._x, UI._cy, col or T.text, shown, FONT); UI._cy = UI._cy + 18
 end
 
 local function renderSectionAt(s, x, y, w)
@@ -1568,7 +1592,13 @@ function M:_drawWatermark()
     end
 end
 
-local SIDEBAR_W = 172
+local SIDEBAR_W = 192
+local NAV_LABELS = {
+    ["WEAPONS"] = "Weapons", ["AGENTS"] = "Agents", ["SKINS CUSTOM"] = "Custom skins",
+    ["VIEWMODEL"] = "Viewmodel", ["SCOPE OVERLAY"] = "Scope overlay", ["CUSTOM SOUNDS"] = "Custom sounds",
+    ["MOVEMENT"] = "Movement", ["REGION"] = "Region", ["IDENTITY"] = "Identity",
+    ["KILLSAY"] = "Killsay", ["WHITELIST"] = "Whitelist", ["CONFIGS"] = "Settings",
+}
 local HEADER_USER
 local function aimwareHeaderUser()
     if HEADER_USER and HEADER_USER ~= "" then return HEADER_USER end
@@ -1586,10 +1616,14 @@ local function tabLayout(tabs, win)
     local pos = {}
     local x = win.x + 10
     local y = win.y + T.titlebar + 40
-    local w, h = SIDEBAR_W - 20, 36
+    local w, step = SIDEBAR_W - 20, 42
+    if #tabs > 11 then
+        step = math.max(32, math.floor((win.h - T.titlebar - 48) / #tabs))
+    end
+    local h = math.min(36, step - 6)
     for i = 1, #tabs do
         pos[i] = { x = x, y = y, w = w, h = h }
-        y = y + 42
+        y = y + step
     end
     return pos
 end
@@ -1607,15 +1641,15 @@ function M:_tabInput(win)
 end
 
 function M:_drawTabBar(win)
-    drawLogo(win.x + 15, win.y + 14, 30, 30)
-    text(win.x + 56, win.y + 12, T.texthi, "rgnMultitool", FONT_LOGO)
-    text(win.x + 56, win.y + 33, T.textdim, "Aimware Lua", FONT_SMALL)
+    drawLogo(win.x + 15, win.y + 15, 40, 28)
+    text(win.x + 67, win.y + 11, T.texthi, "rgnMultitool", FONT_LOGO)
+    text(win.x + 67, win.y + 33, T.textdim, "Aimware Lua Suite", FONT_SMALL)
     local credit = fitText("Made by " .. aimwareHeaderUser(), 180, FONT_SMALL)
     text(win.x + win.w - 50, win.y + 22, T.textdim, credit, FONT_SMALL, "right")
 
     rfill(win.x + 1, win.y + T.titlebar + 1, SIDEBAR_W - 1, win.h - T.titlebar - 2, 10, T.bg, false, false, true, false)
     rect(win.x + SIDEBAR_W, win.y + T.titlebar + 1, 1, win.h - T.titlebar - 3, T.divider)
-    text(win.x + 18, win.y + T.titlebar + 15, T.textdim, "MODULES", FONT_SMALL)
+    text(win.x + 18, win.y + T.titlebar + 15, T.textdim, "MODULES / TOOLS", FONT_SMALL)
 
     local pos = tabLayout(self._tabs, win)
     for i, t in ipairs(self._tabs) do
@@ -1629,7 +1663,9 @@ function M:_drawTabBar(win)
         elseif hov then
             rfill(p.x, p.y, p.w, p.h, 6, { T.widgethi[1], T.widgethi[2], T.widgethi[3], 150 })
         end
-        text(p.x + 15, p.y + 10, lerpc(T.textdim, T.texthi, t._h), t.name, FONT)
+        local label = NAV_LABELS[t.name] or t.name
+        label = fitText(label, p.w - 30, FONT)
+        text(p.x + 15, p.y + 10, lerpc(T.textdim, T.texthi, t._h), label, FONT)
     end
 end
 
@@ -1679,6 +1715,18 @@ function M:_dropdownInput()
     end
 end
 
+local function drawOptionText(x, y, maxWidth, normalColor, value, suffix, suffixColor)
+    value = tostring(value or "")
+    maxWidth = mmax(8, maxWidth or 8)
+    if suffix and suffixColor and value:sub(-#suffix) == suffix then
+        local prefix = fitText(value:sub(1, #value - #suffix), mmax(0, maxWidth - textw(suffix)), FONT)
+        text(x, y, normalColor, prefix, FONT)
+        text(x + textw(prefix), y, suffixColor, suffix, FONT)
+    else
+        text(x, y, normalColor, fitText(value, maxWidth, FONT), FONT)
+    end
+end
+
 function M:_drawDropdown()
     if not M._combo or not M._dd or M._dd.wd ~= M._combo then return end
     local d, wd = M._dd, M._dd.wd
@@ -1699,12 +1747,15 @@ function M:_drawDropdown()
             local sel = multi and wd.value[i] or (not multi and wd.value == i)
             local hov = hovering(d.x, iy, iw, DD_ITEMH)
             if hov then rect(d.x + 1, iy, iw - 2, DD_ITEMH, T.widgethi) end
+            local optionColor = wd.optionColors and wd.optionColors[i]
+            local suffix = wd.optionSuffixes and wd.optionSuffixes[i]
             if multi then
                 rbox(d.x + 8, iy + 5, 12, 12, 3, sel and T.accent or T.widget, sel and T.accent or T.border)
-                text(d.x + 26, iy + 5, (sel or hov) and T.texthi or T.text, opt, FONT)
+                drawOptionText(d.x + 26, iy + 5, iw - 34, (sel or hov) and T.texthi or T.text, opt, suffix, optionColor)
             else
                 if sel then rect(d.x + 1, iy, 3, DD_ITEMH, T.accent) end
-                text(d.x + 9, iy + 5, (sel or hov) and T.texthi or T.text, opt, FONT)
+                local normalColor = (sel or hov) and T.texthi or T.text
+                drawOptionText(d.x + 9, iy + 5, iw - 18, normalColor, opt, suffix, optionColor)
             end
         end
     end
@@ -1840,7 +1891,7 @@ function M:_frame()
     if self._minimized then
         local ease = smooth(self._t)
         ALPHA = ease
-        local miniW, miniH = 154, 42
+        local miniW, miniH = 184, 42
         local expandX = real.x + miniW - 28
         if clicked(expandX, real.y + 10, 22, 22) then
             self._minimized = false
@@ -1855,8 +1906,8 @@ function M:_frame()
         rbox(real.x + 5, real.y + 7, miniW, miniH, 9, T.shadow, { 0, 0, 0, 0 })
         rbox(real.x, real.y, miniW, miniH, 9, T.bg, T.border)
         rfill(real.x, real.y, miniW, 2, 9, T.accent, true, true, false, false)
-        drawLogo(real.x + 7, real.y + 7, 28, 28)
-        text(real.x + 43, real.y + 13, T.texthi, "Multitool", FONT_LOGO)
+        drawLogo(real.x + 7, real.y + 8, 36, 26)
+        text(real.x + 53, real.y + 13, T.texthi, "rgnMultitool", FONT_LOGO)
         rbox(expandX, real.y + 10, 22, 22, 5, T.widget, T.border)
         text(expandX + 11, real.y + 12, T.texthi, "+", FONT_B, "center")
         return
@@ -2084,6 +2135,36 @@ function M:Build(opts)
                 end
             end
         end
+        local manualAADrawActive = self._manualAADrawActive
+        if type(self._manualAADrawCallback) == "function"
+            and (type(manualAADrawActive) ~= "function" or manualAADrawActive()) then
+            local ok, err = pcall(self._manualAADrawCallback)
+            self._manualAADrawAliveAt = t
+            if ok then
+                self._manualAADrawError = nil
+            else
+                local message = tostring(err)
+                if self._manualAADrawError ~= message then
+                    self._manualAADrawError = message
+                    print("[rgnManualAA] main Draw hook error: " .. message)
+                end
+            end
+        end
+        local whitelistDrawActive = self._whitelistDrawActive
+        if type(self._whitelistDrawCallback) == "function"
+            and (type(whitelistDrawActive) ~= "function" or whitelistDrawActive()) then
+            local ok, err = pcall(self._whitelistDrawCallback)
+            self._whitelistDrawAliveAt = t
+            if ok then
+                self._whitelistDrawError = nil
+            else
+                local message = tostring(err)
+                if self._whitelistDrawError ~= message then
+                    self._whitelistDrawError = message
+                    print("[rgnWhitelist] main Draw hook error: " .. message)
+                end
+            end
+        end
     end
 
     callbacks.Register("Draw", "rgnMultitool_UIDraw", function()
@@ -2162,6 +2243,36 @@ function M:Build(opts)
                 if M._movementCommandError ~= message then
                     M._movementCommandError = message
                     print("[rgnMovement] main CreateMove hook error: " .. message)
+                end
+            end
+        end
+        local manualAACommandActive = M._manualAACommandActive
+        local whitelistCommandActive = M._whitelistCommandActive
+        if cmd and type(M._whitelistCommandCallback) == "function"
+            and (type(whitelistCommandActive) ~= "function" or whitelistCommandActive()) then
+            local ok, err = pcall(M._whitelistCommandCallback, cmd)
+            M._whitelistCommandAliveAt = now()
+            if ok then
+                M._whitelistCommandError = nil
+            else
+                local message = tostring(err)
+                if M._whitelistCommandError ~= message then
+                    M._whitelistCommandError = message
+                    print("[rgnWhitelist] main CreateMove hook error: " .. message)
+                end
+            end
+        end
+        if cmd and type(M._manualAACommandCallback) == "function"
+            and (type(manualAACommandActive) ~= "function" or manualAACommandActive()) then
+            local ok, err = pcall(M._manualAACommandCallback, cmd)
+            M._manualAACommandAliveAt = now()
+            if ok then
+                M._manualAACommandError = nil
+            else
+                local message = tostring(err)
+                if M._manualAACommandError ~= message then
+                    M._manualAACommandError = message
+                    print("[rgnManualAA] main CreateMove hook error: " .. message)
                 end
             end
         end
@@ -2261,6 +2372,190 @@ local function loadModule(name, fn)
     end
     return true
 end
+
+loadModule("MANUAL AA", function()
+-- Native Aimware controls stay under Ragebot > Anti-Aim. Runtime drawing and
+-- callbacks are owned by rgnMultitool so reloading cannot duplicate them.
+local rbotAA = gui.Reference("Ragebot", "Anti-Aim")
+local yawOffsetRef = gui.Reference("Ragebot", "Anti-Aim", "Yaw Offset")
+local pitchRef = gui.Reference("Ragebot", "Anti-Aim", "Pitch Angle")
+
+local enabled = gui.Checkbox(rbotAA, "manual_enabled", "Manual anti-aim", true)
+local indicators = gui.Checkbox(rbotAA, "manual_ind_on", "Manual AA indicators", false)
+local keyLeft = gui.Keybox(rbotAA, "manual_left_key", "Manual left", 0)
+local keyRight = gui.Keybox(rbotAA, "manual_right_key", "Manual right", 0)
+local keyForward = gui.Keybox(rbotAA, "manual_forward_key", "Manual forward", 0)
+local keyJumpBug = gui.Keybox(rbotAA, "jb_hold_key", "Jump bug hold", 0)
+local idleYaw = gui.Slider(rbotAA, "manual_idle_yaw", "Back yaw offset", 24, -180, 180)
+local lrPitchOff = gui.Checkbox(rbotAA, "manual_lr_pitch_off", "Left/right pitch off", true)
+local activeColor = gui.ColorPicker(rbotAA, "manual_indicator_active", "Active direction", 74, 166, 255, 255)
+local inactiveColor = gui.ColorPicker(rbotAA, "manual_indicator_inactive", "Inactive direction", 112, 122, 138, 150)
+
+local manualState = 0 -- back, left, right, forward
+local jumpBugHeld, savedAutostrafe = false, nil
+local capturedYaw, capturedPitch, capturedOriginals = nil, nil, false
+local wasEnabled = enabled:GetValue() == true
+local titleFont, rowFont
+pcall(function() titleFont = draw.CreateFont("Bahnschrift SemiBold", 15, 700) end)
+pcall(function() rowFont = draw.CreateFont("Bahnschrift", 13, 600) end)
+if not titleFont then pcall(function() titleFont = draw.CreateFont("Verdana", 13, 700) end) end
+if not rowFont then pcall(function() rowFont = draw.CreateFont("Verdana", 12, 600) end) end
+
+local function getValue(path)
+    local value
+    pcall(function() value = gui.GetValue(path) end)
+    return value
+end
+
+local function setValue(path, value)
+    pcall(function() gui.SetValue(path, value) end)
+end
+
+local function rgba(picker, fallback)
+    local ok, r, g, b, a = pcall(function() return picker:GetValue() end)
+    if ok and type(r) == "number" then return r, g or r, b or r, a or 255 end
+    return fallback[1], fallback[2], fallback[3], fallback[4]
+end
+
+local function releaseJumpBug()
+    if not jumpBugHeld then return end
+    jumpBugHeld = false
+    local restore = savedAutostrafe
+    if restore == nil then restore = true end
+    setValue("misc.autostrafe", restore)
+end
+
+local function checkHotkeys()
+    if enabled:GetValue() ~= true then
+        releaseJumpBug()
+        return
+    end
+
+    local function pressed(box)
+        local key = tonumber(box:GetValue()) or 0
+        return key ~= 0 and input.IsButtonPressed(key)
+    end
+    if pressed(keyLeft) then manualState = manualState == 1 and 0 or 1 end
+    if pressed(keyRight) then manualState = manualState == 2 and 0 or 2 end
+    if pressed(keyForward) then manualState = manualState == 3 and 0 or 3 end
+
+    local jumpKey = tonumber(keyJumpBug:GetValue()) or 0
+    local down = jumpKey ~= 0 and input.IsButtonDown(jumpKey) or false
+    if down and not jumpBugHeld then
+        jumpBugHeld = true
+        savedAutostrafe = getValue("misc.autostrafe")
+        setValue("misc.autostrafe", false)
+    elseif not down then
+        releaseJumpBug()
+    end
+end
+
+local function inGame()
+    local player
+    pcall(function() player = entities.GetLocalPlayer() end)
+    if not player then pcall(function() player = entities.GetLocalPawn() end) end
+    if not player then return false end
+    local team
+    pcall(function() team = player:GetTeamNumber() end)
+    if team == nil then pcall(function() team = player:GetFieldInt("m_iTeamNum") end) end
+    if type(team) == "number" and team >= 1 and team <= 3 then return true end
+    local server = ""
+    pcall(function() server = tostring(engine.GetServerIP() or "") end)
+    return server ~= "" and server ~= "0.0.0.0:0"
+end
+
+local function drawIndicator()
+    if enabled:GetValue() ~= true or indicators:GetValue() ~= true or not inGame() then return end
+    local _, sh = draw.GetScreenSize()
+    if not sh then return end
+    local ar, ag, ab, aa = rgba(activeColor, { 74, 166, 255, 255 })
+    local ir, ig, ib, ia = rgba(inactiveColor, { 112, 122, 138, 150 })
+    -- Aimware keeps NS / MD / SM around the lower half of the left edge.
+    -- Anchor our compact block directly below it and scale it with resolution.
+    local x, y = 11, math.min(math.max(120, math.floor(sh * 0.55)), sh - 92)
+    local rows = {
+        { "LEFT", manualState == 1 },
+        { "RIGHT", manualState == 2 },
+        { "FORWARD", manualState == 3 },
+    }
+
+    if titleFont then draw.SetFont(titleFont) end
+    draw.Color(8, 12, 18, 205)
+    draw.FilledRect(x, y, x + 104, y + 18)
+    draw.Color(ar, ag, ab, 235)
+    draw.FilledRect(x, y, x + 3, y + 18)
+    draw.Color(226, 232, 240, 245)
+    draw.Text(x + 9, y + 2, "MANUAL AA")
+
+    if rowFont then draw.SetFont(rowFont) end
+    for i = 1, #rows do
+        local rowY, active = y + 22 + (i - 1) * 18, rows[i][2]
+        draw.Color(7, 10, 15, active and 205 or 150)
+        draw.FilledRect(x, rowY, x + 104, rowY + 15)
+        if active then
+            draw.Color(ar, ag, ab, aa)
+            draw.FilledRect(x, rowY, x + 3, rowY + 15)
+            draw.Color(238, 244, 252, 255)
+        else
+            draw.Color(ir, ig, ib, ia)
+        end
+        draw.Text(x + 9, rowY + 1, rows[i][1])
+    end
+end
+
+local function restoreOrientation()
+    if not capturedOriginals then return end
+    if capturedYaw ~= nil then pcall(function() yawOffsetRef:SetValue(capturedYaw) end) end
+    if capturedPitch ~= nil then pcall(function() pitchRef:SetValue(capturedPitch) end) end
+    capturedYaw, capturedPitch, capturedOriginals = nil, nil, false
+end
+
+local function manualDraw()
+    local current = enabled:GetValue() == true
+    if wasEnabled and not current then
+        releaseJumpBug()
+        restoreOrientation()
+    end
+    wasEnabled = current
+    drawIndicator()
+end
+
+local function manualMove()
+    -- Input belongs to the command-rate path; this avoids polling hotkeys at
+    -- the render frame rate on high-FPS clients.
+    checkHotkeys()
+    if enabled:GetValue() ~= true or not getValue("rbot.antiaim.enabled") then return end
+    local player
+    pcall(function() player = entities.GetLocalPlayer() end)
+    if not player then pcall(function() player = entities.GetLocalPawn() end) end
+    if not player then return end
+    if not capturedOriginals then
+        capturedOriginals = true
+        pcall(function() capturedYaw = yawOffsetRef:GetValue() end)
+        pcall(function() capturedPitch = pitchRef:GetValue() end)
+    end
+    local yaw, pitch = idleYaw:GetValue(), 1
+    local sidePitch = lrPitchOff:GetValue() and 0 or 1
+    if manualState == 1 then yaw, pitch = -90, sidePitch
+    elseif manualState == 2 then yaw, pitch = 90, sidePitch
+    elseif manualState == 3 then yaw, pitch = 180, 1 end
+    pcall(function() yawOffsetRef:SetValue(yaw) end)
+    pcall(function() pitchRef:SetValue(pitch) end)
+end
+
+M._manualAADrawCallback = manualDraw
+M._manualAADrawActive = function() return true end
+M._manualAACommandCallback = manualMove
+M._manualAACommandActive = function() return enabled:GetValue() == true end
+
+callbacks.Register("Unload", "rgnMultitool_ManualAAUnload", function()
+    releaseJumpBug()
+    restoreOrientation()
+    if M._manualAADrawCallback == manualDraw then M._manualAADrawCallback = nil end
+    if M._manualAACommandCallback == manualMove then M._manualAACommandCallback = nil end
+    M._manualAADrawActive, M._manualAACommandActive = nil, nil
+end)
+end)
 
 loadModule("SKINS", function()
 local M = M
@@ -10530,6 +10825,914 @@ end)
 
 end)
 
+loadModule("REGION", function()
+-- Safe region preference: use CS2/SteamNetworkingSockets console settings
+-- instead of patching steamnetworkingsockets.dll functions at fixed RVAs.
+local tab = M:Tab("REGION")
+tab:Row()
+
+local CONFIG_FILE = "rgnregion_config.txt"
+local SDR_ENDPOINT = "https://api.steampowered.com/ISteamApps/GetSDRConfig/v1/?appid=730"
+local fallbackRegions = {
+    { "ams", "Amsterdam (Netherlands)" },
+    { "atl", "Atlanta (Georgia)" },
+    { "eze", "Buenos Aires (Argentina)" },
+    { "maa2", "Chennai - Ambattur (India)" },
+    { "ord", "Chicago (Illinois)" },
+    { "dfw", "Dallas (Texas)" },
+    { "dxb", "Dubai (United Arab Emirates)" },
+    { "fsn", "Falkenstein (Germany)" },
+    { "fra", "Frankfurt (Germany)" },
+    { "gum", "Guam" },
+    { "hel", "Helsinki (Finland)" },
+    { "hkg", "Hong Kong" },
+    { "jnb", "Johannesburg (South Africa)" },
+    { "lim", "Lima (Peru)" },
+    { "lhr", "London (England)" },
+    { "lax", "Los Angeles (California)" },
+    { "mad", "Madrid (Spain)" },
+    { "bom2", "Mumbai (India)" },
+    { "par", "Paris (France)" },
+    { "scl", "Santiago (Chile)" },
+    { "gru", "Sao Paulo (Brazil)" },
+    { "sea", "Seattle (Washington)" },
+    { "seo", "Seoul (South Korea)" },
+    { "sgp", "Singapore" },
+    { "iad", "Sterling (Virginia)" },
+    { "sto2", "Stockholm - Bromma (Sweden)" },
+    { "sto", "Stockholm - Kista (Sweden)" },
+    { "syd", "Sydney (Australia)" },
+    { "tyo", "Tokyo Koto City (Japan)" },
+    { "vie", "Vienna (Austria)" },
+    { "waw", "Warsaw (Poland)" },
+    { "eat", "Wenatchee (Washington)" },
+    { "ctu", "Alibaba Cloud Chengdu (China)" },
+    { "ctum", "Alibaba Cloud Chengdu - Mobile (China)" },
+    { "ctut", "Alibaba Cloud Chengdu - Telecom (China)" },
+    { "ctuu", "Alibaba Cloud Chengdu - Unicom (China)" },
+    { "pek", "Alibaba Cloud Beijing (China)" },
+    { "pekm", "Alibaba Cloud Beijing - Mobile (China)" },
+    { "pekt", "Alibaba Cloud Beijing - Telecom (China)" },
+    { "peku", "Alibaba Cloud Beijing - Unicom (China)" },
+    { "pvg", "Perfect World Shanghai (China)" },
+    { "pvgm", "Perfect World Shanghai - Mobile (China)" },
+    { "pvgt", "Perfect World Shanghai - Telecom (China)" },
+    { "pvgu", "Perfect World Shanghai - Unicom (China)" },
+    { "tgd", "Tencent Guangzhou (China)" },
+    { "tgdm", "Tencent Guangzhou - Mobile (China)" },
+    { "tgdt", "Tencent Guangzhou - Telecom (China)" },
+    { "tgdu", "Tencent Guangzhou - Unicom (China)" },
+}
+
+-- Current and older POP aliases which can be returned by Steam's live relay
+-- interface even when the public app configuration exposes a newer name.
+local POP_NAME_OVERRIDES = {
+    bom = "Mumbai (India)", maa = "Chennai - Ambattur (India)",
+    mwh = "Wenatchee (Washington)", helm = "Helsinki (Finland)",
+    tyo1 = "Tokyo Koto City (Japan)", tyo2 = "Tokyo Koto City (Japan)", tyo3 = "Tokyo Koto City (Japan)",
+    can = "Guangzhou (China)", sha = "Shanghai (China)",
+    pwj = "Tianjin (China)", pwg = "Guangzhou (China)", pwz = "Chengdu (China)",
+    pwu = "China relay", tsn = "Tianjin (China)",
+}
+
+local function readText(path)
+    local out
+    pcall(function()
+        local f = file.Open(path, "r")
+        if f then out = f:Read(); f:Close() end
+    end)
+    return type(out) == "string" and out or ""
+end
+
+local function writeText(path, text)
+    local ok = false
+    pcall(function()
+        local f = file.Open(path, "w")
+        if f then f:Write(text); f:Close(); ok = true end
+    end)
+    return ok
+end
+
+local saved = {}
+for key, value in readText(CONFIG_FILE):gmatch("([%w_]+)=([^\r\n]*)") do saved[key] = value end
+
+local regionCodes, regionNames, regionColors, regionSuffixes = { "" }, { "Automatic (nearest available)" }, {}, {}
+local regionPings, nearestCode, nearestName, nearestPing = {}, "", "", nil
+
+local function pingColor(ping)
+    if type(ping) ~= "number" then return { 128, 140, 158, 210 } end
+    -- Smooth green -> amber -> red transition: low latency is green, while
+    -- an increasingly high value shifts gradually through yellow to red.
+    local function blend(a, b, t)
+        return {
+            math.floor(a[1] + (b[1] - a[1]) * t + 0.5),
+            math.floor(a[2] + (b[2] - a[2]) * t + 0.5),
+            math.floor(a[3] + (b[3] - a[3]) * t + 0.5), 255,
+        }
+    end
+    if ping <= 55 then return blend({ 74, 210, 132 }, { 235, 207, 78 }, ping / 55) end
+    if ping <= 145 then return blend({ 235, 207, 78 }, { 239, 93, 83 }, (ping - 55) / 90) end
+    return { 239, 93, 83, 255 }
+end
+
+local function cloneEntries(entries)
+    local out = {}
+    for i = 1, #entries do out[#out + 1] = { entries[i][1], entries[i][2] } end
+    return out
+end
+
+local regionCatalog = cloneEntries(fallbackRegions)
+
+local function replaceRegions(entries, keepCode)
+    local rows, seen = {}, {}
+    for i = 1, #entries do
+        local code = tostring(entries[i][1] or ""):lower()
+        local name = tostring(entries[i][2] or "")
+        if code:match("^[%w%d_]+$") and code ~= "" and name ~= "" and not seen[code] then
+            seen[code] = true
+            rows[#rows + 1] = { code = code, name = name, ping = tonumber(regionPings[code]) }
+        end
+    end
+
+    -- Resolve older and China-specific POP aliases returned by the live
+    -- network interface.  Unknown internal relays are intentionally omitted:
+    -- presenting them as "Steam relay" is not useful for making a choice.
+    for code, ping in pairs(regionPings) do
+        if not seen[code] then
+            local name = POP_NAME_OVERRIDES[code]
+            if name then
+                seen[code] = true
+                rows[#rows + 1] = { code = code, name = name, ping = tonumber(ping) }
+            end
+        end
+    end
+
+    table.sort(rows, function(a, b)
+        local ap, bp = a.ping, b.ping
+        if (ap ~= nil) ~= (bp ~= nil) then return ap ~= nil end
+        if ap and bp and ap ~= bp then return ap < bp end
+        return a.name < b.name
+    end)
+
+    nearestCode, nearestName, nearestPing = "", "", nil
+    for i = 1, #rows do
+        if rows[i].ping and (nearestPing == nil or rows[i].ping < nearestPing) then
+            nearestCode, nearestName, nearestPing = rows[i].code, rows[i].name, rows[i].ping
+        end
+    end
+
+    local automatic, automaticSuffix = "Automatic (nearest available)", nil
+    if nearestCode ~= "" then
+        automaticSuffix = tostring(nearestPing) .. " ms)"
+        local shortName = nearestName:gsub("%s*%b()", "")
+        automatic = "Automatic (" .. shortName .. " / " .. automaticSuffix
+    end
+    local codes, names, colors, suffixes = { "" }, { automatic }, { pingColor(nearestPing) }, { automaticSuffix }
+    for i = 1, #rows do
+        local row = rows[i]
+        local latency = row.ping and (" (" .. tostring(math.floor(row.ping + 0.5)) .. " ms)") or " (probe pending)"
+        codes[#codes + 1] = row.code
+        names[#names + 1] = row.name .. latency
+        colors[#colors + 1] = pingColor(row.ping)
+        suffixes[#suffixes + 1] = latency
+    end
+    regionCodes, regionNames, regionColors, regionSuffixes = codes, names, colors, suffixes
+    local selected = 1
+    for i = 1, #regionCodes do
+        if regionCodes[i] == keepCode then selected = i; break end
+    end
+    return selected
+end
+
+local savedCodes = {}
+for code in tostring(saved.region or ""):gmatch("[%w%d_]+") do savedCodes[code:lower()] = true end
+replaceRegions(fallbackRegions, "")
+local regionSection = tab:Section("Matchmaking region")
+local regionForceEnabled = saved.enabled == "1" and next(savedCodes) ~= nil
+local initialSelected = {}
+for i = 2, #regionCodes do
+    if savedCodes[regionCodes[i]] then initialSelected[#initialSelected + 1] = i end
+end
+local regionCombo = regionSection:MultiCombo("Preferred relay(s)", regionNames, initialSelected)
+local regionWidget = regionSection.ws[#regionSection.ws]
+regionWidget.optionColors = regionColors
+regionWidget.optionSuffixes = regionSuffixes
+local maxPing = regionSection:Slider("Maximum matchmaking ping", math.max(25, math.min(350, tonumber(saved.max_ping) or 80)), 25, 350, 5, "%.0f ms")
+
+tab:Col()
+local actionSection = tab:Section("Actions")
+local statusSection = tab:Section("Status")
+
+local originalPing = 150
+pcall(function()
+    local value = tonumber(client.GetConVar("mm_dedicated_search_maxping"))
+    if value and value >= 1 then originalPing = value end
+end)
+
+local applied = false
+local activeCode = ""
+local activePing = originalPing
+local statusText = "Automatic selection; module is off"
+local lastAppliedSignature, lastSavedSignature
+local nextPoll = 0
+local nextProbe, probeAttempts = 0, 0
+local PROBE_MAX_ATTEMPTS = 12
+local PROBE_RETRY_SECONDS = 6.0
+
+local selectedCodes, bestSelectedCode, selectionSignature, restoreSelectedCodes
+
+selectedCodes = function()
+    local picked, seen = {}, {}
+    local value = regionCombo:Get()
+    if type(value) ~= "table" then return picked end
+    for i = 2, #regionCodes do
+        if value[i] and not seen[regionCodes[i]] then
+            seen[regionCodes[i]] = true
+            picked[#picked + 1] = regionCodes[i]
+        end
+    end
+    return picked
+end
+
+selectionSignature = function()
+    local codes = selectedCodes()
+    table.sort(codes)
+    return table.concat(codes, ",")
+end
+
+bestSelectedCode = function()
+    local codes = selectedCodes()
+    local best, bestPing
+    for i = 1, #codes do
+        local ping = tonumber(regionPings[codes[i]])
+        if best == nil or (ping ~= nil and (bestPing == nil or ping < bestPing)) then
+            best, bestPing = codes[i], ping
+        end
+    end
+    return best or "", #codes
+end
+
+restoreSelectedCodes = function(codes)
+    local wanted, selected = {}, {}
+    for i = 1, #(codes or {}) do wanted[codes[i]] = true end
+    for i = 2, #regionCodes do
+        if wanted[regionCodes[i]] then selected[i] = true end
+    end
+    regionCombo:Set(selected)
+end
+
+-- Steam publishes this interface specifically for estimating relay latency.
+-- It is a read-only V4 call: no signatures, RVA offsets, memory patches, or
+-- per-frame native calls are used here.  A failed probe simply leaves the
+-- normal official list intact.
+local relayProbe = { tried = false, ready = false, detail = "Relay probe pending" }
+
+local function decodePop(id)
+    local text = ""
+    for shift = 24, 0, -8 do
+        local byte = math.floor((tonumber(id) or 0) / (2 ^ shift)) % 256
+        if byte >= 32 and byte < 127 then text = text .. string.char(byte) end
+    end
+    return (text:gsub("%s", "")):lower()
+end
+
+local function openRelayProbe()
+    if relayProbe.tried then return relayProbe.ready end
+    relayProbe.tried = true
+    if type(ffi) ~= "table" then
+        relayProbe.detail = "Aimware FFI is unavailable"
+        return false
+    end
+
+    local ok, reason = pcall(function()
+        local module = ffi.C.GetModuleHandleA("steamnetworkingsockets.dll")
+        if module == nil then error("steamnetworkingsockets.dll is not loaded") end
+        local accessor = ffi.C.GetProcAddress(module, "SteamNetworkingUtils_LibV4")
+        if accessor == nil then error("SteamNetworkingUtils V4 is unavailable") end
+
+        local utils = ffi.cast("void*(*)(void)", accessor)()
+        if utils == nil then error("SteamNetworkingUtils returned no interface") end
+        local vtable = ffi.cast("void***", utils)[0]
+        if vtable == nil then error("SteamNetworkingUtils returned no vtable") end
+
+        -- ISteamNetworkingUtils V4 public methods: CheckPingDataUpToDate=7,
+        -- GetPingToDataCenter=8, GetPOPCount=10 and GetPOPList=11.
+        relayProbe.utils = utils
+        relayProbe.checkFresh = ffi.cast("bool(*)(void*, float)", vtable[7])
+        relayProbe.getPing = ffi.cast("int(*)(void*, uint32_t, uint32_t*)", vtable[8])
+        relayProbe.getDirectPing = ffi.cast("int(*)(void*, uint32_t)", vtable[9])
+        relayProbe.getCount = ffi.cast("int(*)(void*)", vtable[10])
+        relayProbe.getList = ffi.cast("int(*)(void*, uint32_t*, int)", vtable[11])
+    end)
+    relayProbe.ready = ok and relayProbe.utils ~= nil and relayProbe.getPing ~= nil
+        and relayProbe.getDirectPing ~= nil and relayProbe.getCount ~= nil and relayProbe.getList ~= nil
+    relayProbe.detail = relayProbe.ready and "Steam relay latency API ready" or ("Relay API unavailable: " .. tostring(reason))
+    return relayProbe.ready
+end
+
+local function refreshRelayPings(keepCodes)
+    if not openRelayProbe() then return 0 end
+    -- This runs only after a user refresh or during the bounded startup pass.
+    -- Asking for fresh data here starts Steam's measurement if it has not
+    -- already started; it does not patch or alter matchmaking state.
+    pcall(function() relayProbe.checkFresh(relayProbe.utils, 0.0) end)
+
+    local okCount, count = pcall(function() return tonumber(relayProbe.getCount(relayProbe.utils)) or 0 end)
+    if not okCount or count <= 0 then
+        relayProbe.detail = "Steam relay list is still initializing"
+        return 0
+    end
+    count = math.min(count, 256)
+    local ids = ffi.new("uint32_t[?]", count)
+    local okList, filled = pcall(function() return tonumber(relayProbe.getList(relayProbe.utils, ids, count)) or 0 end)
+    if not okList or filled <= 0 then
+        relayProbe.detail = "Steam returned no relay list yet"
+        return 0
+    end
+
+    local measured, directCount, relayedCount = {}, 0, 0
+    for i = 0, math.min(filled, count) - 1 do
+        local id, code = tonumber(ids[i]), decodePop(ids[i])
+        if code ~= "" then
+            local ping
+            local okDirect, direct = pcall(function() return tonumber(relayProbe.getDirectPing(relayProbe.utils, id)) end)
+            if okDirect and type(direct) == "number" and direct >= 0 and direct <= 2000 then
+                ping, directCount = direct, directCount + 1
+            else
+                local via = ffi.new("uint32_t[1]")
+                local okPing, relayed = pcall(function() return tonumber(relayProbe.getPing(relayProbe.utils, id, via)) end)
+                if okPing and type(relayed) == "number" and relayed >= 0 and relayed <= 2000 then
+                    ping, relayedCount = relayed, relayedCount + 1
+                end
+            end
+            if ping then
+                measured[code] = math.floor(ping + 0.5)
+            end
+        end
+    end
+    if next(measured) == nil then
+        relayProbe.detail = "Steam is measuring relay latency (" .. tostring(count) .. " relays found, no samples yet)"
+        return 0
+    end
+
+    local measuredCount = 0
+    for _ in pairs(measured) do measuredCount = measuredCount + 1 end
+    regionPings = measured
+    local keep = keepCodes or selectedCodes()
+    replaceRegions(regionCatalog, "")
+    regionWidget.options = regionNames
+    regionWidget.optionColors = regionColors
+    regionWidget.optionSuffixes = regionSuffixes
+    restoreSelectedCodes(keep)
+    relayProbe.detail = "Measured " .. tostring(measuredCount) .. " Steam relays (direct "
+        .. tostring(directCount) .. ", relayed " .. tostring(relayedCount) .. ")"
+    return measuredCount
+end
+
+local function settingsSignature()
+    return table.concat({
+        regionForceEnabled and "1" or "0",
+        selectionSignature(),
+        tostring(math.floor(tonumber(maxPing:Get()) or 80)),
+    }, "|")
+end
+
+local function saveSettings()
+    local text = table.concat({
+        "enabled=" .. (regionForceEnabled and "1" or "0"),
+        "region=" .. selectionSignature(),
+        "max_ping=" .. tostring(math.floor(tonumber(maxPing:Get()) or 80)),
+    }, "\n")
+    writeText(CONFIG_FILE, text)
+    lastSavedSignature = settingsSignature()
+end
+
+local function resetRelay()
+    pcall(function() client.Command('sdr SDRClient_ForceRelayCluster ""', true) end)
+end
+
+local function regionNameForCode(code)
+    for i = 2, #regionCodes do
+        if regionCodes[i] == code then
+            -- Remove only the final latency suffix, retaining country names.
+            return (regionNames[i] or code):gsub(" %([^()]+ ms%)$", "")
+        end
+    end
+    return code
+end
+
+local function restoreAutomatic(showNotice)
+    resetRelay()
+    pcall(function() client.SetConVar("mm_dedicated_search_maxping", originalPing, true) end)
+    regionForceEnabled = false
+    applied = false
+    activeCode = ""
+    activePing = originalPing
+    lastAppliedSignature = nil
+    statusText = "Automatic selection restored"
+    if showNotice then M:Notify(statusText, "success") end
+end
+
+local function applySelection(showNotice)
+    local code, selectedCount = bestSelectedCode()
+    regionForceEnabled = code ~= ""
+    local ping = math.max(25, math.min(350, math.floor(tonumber(maxPing:Get()) or 80)))
+    local pingOK = pcall(function() client.SetConVar("mm_dedicated_search_maxping", ping, true) end)
+    local relayOK
+    if code == "" then
+        relayOK = pcall(resetRelay)
+    else
+        relayOK = pcall(function()
+            client.Command("sdr SDRClient_ForceRelayCluster " .. code, true)
+        end)
+    end
+    applied = pingOK and relayOK
+    activeCode, activePing = code, ping
+    lastAppliedSignature = settingsSignature()
+    local measured = tonumber(regionPings[code])
+    statusText = code == "" and "Automatic relay selection" or ("Forced: " .. regionNameForCode(code))
+    if showNotice then M:Notify(statusText, applied and "success" or "error") end
+    return applied
+end
+
+local function refreshOfficialRegions(showNotice)
+    local keep = selectedCodes()
+    local raw
+    pcall(function() raw = http.Get(SDR_ENDPOINT .. "&nocache=" .. tostring(math.floor((globals.RealTime() or 0) * 1000))) end)
+    local loadedOfficial = false
+    if type(raw) == "string" and #raw >= 100 then
+        local entries, seen = {}, {}
+        -- Extract the `pops` object first.  Individual POP entries may contain
+        -- aliases, geo data and nested relay arrays before/after `desc`, so a
+        -- simple one-line JSON pattern loses many of them (notably China).
+        local pops = raw:match('"pops"%s*:%s*(%b{})') or ""
+        for code, object in pops:gmatch('"([%w%d_]+)"%s*:%s*(%b{})') do
+            code = code:lower()
+            local name = object:match('"desc"%s*:%s*"([^"]+)"')
+            if name and not seen[code] then
+                seen[code] = true
+                name = name:gsub('\\/', '/')
+                entries[#entries + 1] = { code, name }
+                local aliases = object:match('"aliases"%s*:%s*(%b[])')
+                if aliases then
+                    for alias in aliases:gmatch('"([%w%d_]+)"') do
+                        alias = alias:lower()
+                        if not seen[alias] then
+                            seen[alias] = true
+                            entries[#entries + 1] = { alias, name }
+                        end
+                    end
+                end
+            end
+        end
+        if #entries >= 10 then
+            regionCatalog = entries
+            loadedOfficial = true
+        end
+    end
+
+    local measured = refreshRelayPings(keep)
+    if measured <= 0 then
+        replaceRegions(regionCatalog, "")
+        regionWidget.options = regionNames
+        regionWidget.optionColors = regionColors
+        regionWidget.optionSuffixes = regionSuffixes
+        restoreSelectedCodes(keep)
+        -- Steam takes a few seconds to create fresh ping measurements.  Retry
+        -- only a handful of times, never on every frame.
+        nextProbe, probeAttempts = (globals.RealTime() or 0) + 1.0, 0
+    end
+
+    if measured > 0 and nearestCode ~= "" then
+        statusText = "Nearest: " .. nearestName .. " (" .. tostring(nearestPing) .. " ms)"
+    elseif loadedOfficial then
+        statusText = "Official Steam list loaded; " .. relayProbe.detail
+    else
+        statusText = "Built-in Steam list in use; " .. relayProbe.detail
+    end
+    if showNotice then M:Notify(statusText, measured > 0 and "success" or "info") end
+    return loadedOfficial or measured > 0
+end
+
+actionSection:Button("Reload relay pings", function()
+    refreshOfficialRegions(true)
+    saveSettings()
+end)
+actionSection:Button("Force selected relay(s)", function()
+    applySelection(true)
+    saveSettings()
+end)
+
+statusSection:Custom(62, function(ui)
+    ui.label(statusText, ui.T.text)
+    local code, count = bestSelectedCode()
+    local measured = tonumber(regionPings[code])
+    if code ~= "" then
+        ui.label((count > 1 and ("Best of " .. tostring(count) .. " selected") or "One relay selected")
+            .. " | max " .. tostring(math.floor(tonumber(maxPing:Get()) or 80)) .. " ms"
+            .. (measured and (" | " .. tostring(measured) .. " ms") or ""), ui.T.textdim)
+    else
+        ui.label("Select one or more relays to force matchmaking.", ui.T.textdim)
+    end
+    local total, direct, relayed = relayProbe.detail:match("^Measured (%d+) Steam relays %(direct (%d+), relayed (%d+)%)$")
+    ui.label(total and ("Samples: " .. total .. " (direct " .. direct .. " / relay " .. relayed .. ")") or relayProbe.detail, ui.T.textdim)
+end)
+
+pcall(function() callbacks.Unregister("Draw", "rgnMultitool_RegionDraw") end)
+pcall(function() callbacks.Unregister("Unload", "rgnMultitool_RegionUnload") end)
+callbacks.Register("Draw", "rgnMultitool_RegionDraw", function()
+    local t = 0
+    pcall(function() t = globals.RealTime() end)
+    if t < nextPoll then return end
+    nextPoll = t + 0.25
+    local signature = settingsSignature()
+    if signature ~= lastSavedSignature then saveSettings() end
+    if regionForceEnabled then
+        if signature ~= lastAppliedSignature then applySelection(false) end
+    elseif applied then
+        restoreAutomatic(false)
+    end
+
+    -- One bounded initialization pass obtains the local Steam relay pings
+    -- without leaving an expensive polling loop running during a match.
+    if nextProbe > 0 and t >= nextProbe and probeAttempts < PROBE_MAX_ATTEMPTS then
+        probeAttempts = probeAttempts + 1
+        local keep = selectedCodes()
+        local measured = refreshRelayPings(keep)
+        if measured > 0 then
+            nextProbe = 0
+            statusText = "Nearest: " .. nearestName .. " (" .. tostring(nearestPing) .. " ms)"
+        else
+            nextProbe = t + 2.0
+        end
+    elseif nextProbe > 0 and probeAttempts >= PROBE_MAX_ATTEMPTS then
+        -- The relay subsystem may only become ready after CS2 has completed
+        -- its own connection work.  Keep trying at a very low frequency so
+        -- the user never needs to press Refresh, while avoiding render-rate
+        -- polling or any meaningful FPS cost.
+        nextProbe = t + PROBE_RETRY_SECONDS
+        probeAttempts = 0
+        relayProbe.detail = "Waiting for Steam relay samples; retrying automatically"
+    end
+end)
+
+-- Begin one low-frequency local probe on load.  The static catalogue remains
+-- usable while Steam finishes its asynchronous latency measurement.
+nextProbe = (globals.RealTime() or 0) + 0.5
+
+callbacks.Register("Unload", "rgnMultitool_RegionUnload", function()
+    saveSettings()
+    if applied then restoreAutomatic(false) end
+    pcall(callbacks.Unregister, "Draw", "rgnMultitool_RegionDraw")
+end)
+
+end)
+
+loadModule("WHITELIST", function()
+-- Session whitelist with the original immunity behavior, presented inside the
+-- multitool instead of opening a second Aimware window.
+local tab = M:Tab("WHITELIST")
+tab:Row()
+local playersSection = tab:Section("Enemy players")
+local playerLabels = { "[ no enemies detected ]" }
+local playerList = playersSection:Listbox("", playerLabels, "fill", 1)
+tab:Col()
+local controlSection = tab:Section("Whitelist control")
+local whitelistEnabled = controlSection:Checkbox("Enable whitelist", false)
+local forceAll = controlSection:Checkbox("Ignore whitelist / target everyone", false)
+-- The original whitelist stored its state by C_CSPlayerPawn index.  Ragebot
+-- and DrawESP both receive that pawn, whereas a CCSPlayerController can keep
+-- a different index after a respawn or side change.  Keep the same identity
+-- end-to-end so the UI state and the actual target are always identical.
+local protectedByIndex, rowsBySelection, knownEntities = {}, {}, {}
+local refreshRequested = true
+local lastEnabled = false
+local detectionStatus = "Waiting for a match"
+local enforcementStatus = "Protection inactive"
+
+local colorSection = tab:Section("Visuals")
+local protectedColor = colorSection:ColorPicker("Protected color", { 76, 201, 156, 255 })
+local targetColor = colorSection:ColorPicker("Target color", { 255, 166, 74, 255 })
+
+local function safeCall(fn, fallback)
+    local ok, value = pcall(fn)
+    if ok then return value end
+    return fallback
+end
+
+local function entityIndex(entity)
+    local value = safeCall(function() return tonumber(entity:GetIndex()) end)
+    return value and value > 0 and value or nil
+end
+
+local function entityTeam(entity)
+    local value = safeCall(function() return tonumber(entity:GetTeamNumber()) end)
+    if value == nil then value = safeCall(function() return tonumber(entity:GetPropInt("m_iTeamNum")) end) end
+    if value == nil then value = safeCall(function() return tonumber(entity:GetFieldInt("m_iTeamNum")) end) end
+    return value
+end
+
+local function fieldBool(entity, name)
+    local value = safeCall(function() return entity:GetFieldBool(name) end)
+    if value == nil then value = safeCall(function() return entity:GetPropBool(name) end) end
+    if type(value) == "number" then return value ~= 0 end
+    return value == true
+end
+
+local function controllerPawn(controller)
+    if not controller then return nil end
+    local pawn = safeCall(function() return controller:GetPropEntity("m_hPlayerPawn") end)
+    if not pawn then pawn = safeCall(function() return controller:GetPropEntity("m_hPawn") end) end
+    if not pawn then pawn = safeCall(function() return controller:GetFieldEntity("m_hPlayerPawn") end) end
+    if not pawn then pawn = safeCall(function() return controller:GetFieldEntity("m_hPawn") end) end
+    if pawn then return pawn end
+    local handle = safeCall(function() return tonumber(controller:GetPropInt("m_hPlayerPawn")) end)
+    if not handle or handle == 0 or handle == -1 then handle = safeCall(function() return tonumber(controller:GetFieldInt("m_hPlayerPawn")) end) end
+    if handle and handle ~= 0 and handle ~= -1 then
+        local index = handle % 32768
+        if index > 0 and index ~= 32767 then pawn = safeCall(function() return entities.GetByIndex(index) end) end
+    end
+    return pawn
+end
+
+local function setImmortal(entity, value)
+    if not entity then return end
+    pcall(function()
+        local current = entity:GetFieldBool("m_bGunGameImmunity")
+        if current ~= nil and current ~= (value and true or false) then
+            entity:SetFieldBool(value and true or false, "m_bGunGameImmunity")
+        end
+    end)
+end
+
+local function cleanupImmortalStates()
+    local pawns = safeCall(function() return entities.FindByClass("C_CSPlayerPawn") end, {}) or {}
+    for i = 1, #pawns do
+        local entity = pawns[i]
+        if safeCall(function() return entity:IsPlayer() end, false) then setImmortal(entity, false) end
+    end
+    local controllers = safeCall(function() return entities.FindByClass("CCSPlayerController") end, {}) or {}
+    for i = 1, #controllers do setImmortal(controllerPawn(controllers[i]), false) end
+end
+
+local function cleanPlayerName(value)
+    if type(value) ~= "string" then return nil end
+    if value:find("%z") then return nil end
+    value = value:gsub("[%c%z]", " "):gsub("^%s+", ""):gsub("%s+$", "")
+    if value == "" or value == "CCSPlayerController" or value == "C_CSPlayerPawn"
+        or value == "CCSPlayerPawn" or value == "C_CSPlayerPawnBase" then return nil end
+    local compact = value:gsub("%s", "")
+    local wordish = 0
+    for i = 1, #compact do
+        local byte = compact:byte(i)
+        if (byte >= 48 and byte <= 57) or (byte >= 65 and byte <= 90)
+            or (byte >= 97 and byte <= 122) or byte == 95 or byte >= 128 then
+            wordish = wordish + 1
+        end
+    end
+    if #compact < 2 or wordish < math.max(1, math.floor(#compact * 0.40)) then return nil end
+    return value:sub(1, 48)
+end
+
+local function playerName(entity, controller)
+    local name
+    local controllerIndex = entityIndex(controller)
+    local pawnIndex = entityIndex(entity)
+
+    -- Aimware's public player-name helpers are safer than reading raw
+    -- controller string storage and work for both humans and bots.
+    if type(client) == "table" and type(client.GetPlayerNameByIndex) == "function" then
+        if controllerIndex then name = cleanPlayerName(safeCall(function() return client.GetPlayerNameByIndex(controllerIndex) end)) end
+        if not name and pawnIndex then name = cleanPlayerName(safeCall(function() return client.GetPlayerNameByIndex(pawnIndex) end)) end
+    end
+    if not name and type(client) == "table" and type(client.GetPlayerInfo) == "function" then
+        local info
+        if controllerIndex then info = safeCall(function() return client.GetPlayerInfo(controllerIndex) end) end
+        if type(info) ~= "table" and pawnIndex then info = safeCall(function() return client.GetPlayerInfo(pawnIndex) end) end
+        if type(info) == "table" then name = cleanPlayerName(info.Name or info.name or info.PlayerName or info.playername) end
+    end
+
+    -- Exact compatibility path used by the original working whitelist.lua.
+    if not name and entity then
+        name = cleanPlayerName(safeCall(function()
+            local original = entity:GetFieldEntity("m_hOriginalController")
+            return original and original:GetFieldString("m_iszPlayerName") or nil
+        end))
+    end
+
+    -- Last fallback for builds that only expose controller fields.
+    if not name and controller then
+        name = cleanPlayerName(safeCall(function() return controller:GetFieldString("m_iszPlayerName") end))
+        if not name then name = cleanPlayerName(safeCall(function() return controller:GetPropString("m_iszPlayerName") end)) end
+        if not name then name = cleanPlayerName(safeCall(function() return controller:GetName() end)) end
+    end
+    return name or ("Player #" .. tostring(controllerIndex or pawnIndex or "?"))
+end
+
+local function localPawn()
+    local pawn = safeCall(function() return entities.GetLocalPawn() end)
+    if pawn == nil then pawn = safeCall(function() return entities.GetLocalPlayer() end) end
+    return pawn
+end
+
+local function isEnemy(entity, team)
+    if not entity or safeCall(function() return entity:IsPlayer() end, false) ~= true then return false end
+    local otherTeam = entityTeam(entity)
+    return type(otherTeam) == "number" and otherTeam ~= team and otherTeam >= 2 and otherTeam <= 3
+end
+
+local function applyState(entity, index)
+    local enabledNow = whitelistEnabled:Get() == true
+    local protected = enabledNow and forceAll:Get() ~= true and protectedByIndex[index] == true
+    setImmortal(entity, protected)
+    return protected
+end
+
+local function refreshPlayers()
+    local current, rows = {}, {}
+    local pawn = localPawn()
+    local team = entityTeam(pawn)
+    local pawns = safeCall(function() return entities.FindByClass("C_CSPlayerPawn") end, {}) or {}
+
+    -- This is intentionally the original whitelist enumeration path.  It is
+    -- the only source used for the row key and for the immunity write below.
+    if type(team) == "number" then
+        for i = 1, #pawns do
+            local entity = pawns[i]
+            if isEnemy(entity, team) then
+                local index = entityIndex(entity)
+                if index then
+                    if protectedByIndex[index] == nil then protectedByIndex[index] = false end
+                    current[index] = entity
+                    applyState(entity, index)
+                    rows[#rows + 1] = { index = index, entity = entity, name = playerName(entity) }
+                end
+            end
+        end
+    end
+    detectionStatus = string.format("Detected: %d | pawns: %d | team: %s",
+                                    #rows, #pawns, tostring(team or "?"))
+    if whitelistEnabled:Get() == true then
+        local protectedCount = 0
+        if forceAll:Get() ~= true then
+            for index, entity in pairs(current) do
+                if entity and protectedByIndex[index] == true then protectedCount = protectedCount + 1 end
+            end
+        end
+        enforcementStatus = string.format("Protected: %d | Targets: %d", protectedCount, math.max(0, #rows - protectedCount))
+    else
+        enforcementStatus = "Protection inactive"
+    end
+    for index, entity in pairs(knownEntities) do
+        if current[index] == nil or current[index] ~= entity then
+            setImmortal(entity, false)
+        end
+        if current[index] == nil then
+            protectedByIndex[index] = nil
+        end
+    end
+    knownEntities = current
+    table.sort(rows, function(a, b)
+        local an, bn = a.name:lower(), b.name:lower()
+        if an == bn then return a.index < b.index end
+        return an < bn
+    end)
+
+    for i = #playerLabels, 1, -1 do playerLabels[i] = nil end
+    for i = #rowsBySelection, 1, -1 do rowsBySelection[i] = nil end
+    if #rows == 0 then
+        playerLabels[1] = "[ no enemies detected ]"
+    else
+        for i = 1, #rows do
+            local row = rows[i]
+            rowsBySelection[i] = row
+            local state = protectedByIndex[row.index] == true and "PROTECTED" or "TARGET"
+            playerLabels[i] = string.format("[%s] %s", state, row.name)
+        end
+    end
+    local selected = tonumber(playerList:Get()) or 1
+    if selected < 1 then selected = 1 end
+    if selected > #playerLabels then selected = #playerLabels end
+    playerList:Set(selected)
+end
+
+local function selectedRow()
+    return rowsBySelection[tonumber(playerList:Get()) or 1]
+end
+
+controlSection:Button("Toggle selected protection", function()
+    local row = selectedRow()
+    if not row then M:Notify("select an enemy first", "info"); return end
+    protectedByIndex[row.index] = not (protectedByIndex[row.index] == true)
+    applyState(row.entity, row.index)
+    refreshPlayers()
+end)
+controlSection:Button("Protect every enemy", function()
+    forceAll:Set(false)
+    for index in pairs(knownEntities) do protectedByIndex[index] = true end
+    refreshPlayers()
+end)
+controlSection:Button("Target every enemy", function()
+    forceAll:Set(false)
+    for index in pairs(knownEntities) do protectedByIndex[index] = false end
+    refreshPlayers()
+end)
+
+local statusSection = tab:Section("Selected player")
+statusSection:Custom(72, function(ui)
+    local row = selectedRow()
+    if not row then
+        ui.label("No enemy selected", ui.T.textdim)
+        ui.label(detectionStatus, ui.T.textdim)
+        ui.label(enforcementStatus, ui.T.textdim)
+        ui.label("New enemies start as valid targets.", ui.T.textdim)
+        return
+    end
+    local protected = protectedByIndex[row.index] == true
+    ui.label(row.name, ui.T.texthi)
+    ui.label(protected and "Status: protected from targeting" or "Status: valid target",
+             protected and { 76, 201, 156, 255 } or { 255, 166, 74, 255 })
+    ui.label(detectionStatus, ui.T.textdim)
+    ui.label(enforcementStatus, ui.T.textdim)
+end)
+
+cleanupImmortalStates()
+local function clock()
+    local value = 0
+    pcall(function()
+        if type(common) == "table" and type(common.Time) == "function" then value = common.Time()
+        elseif type(globals) == "table" and type(globals.RealTime) == "function" then value = globals.RealTime() end
+    end)
+    return tonumber(value) or 0
+end
+local nextRefresh = 0
+local function whitelistRuntime()
+    local currentEnabled = whitelistEnabled:Get() == true
+    if lastEnabled and not currentEnabled then cleanupImmortalStates() end
+    if currentEnabled and not lastEnabled then refreshRequested = true end
+    lastEnabled = currentEnabled
+    local t = clock()
+    if refreshRequested or t >= nextRefresh then
+        refreshRequested = false
+        nextRefresh = t + 0.35
+        refreshPlayers()
+    end
+end
+callbacks.Register("Draw", "rgnMultitool_WhitelistRefresh", whitelistRuntime)
+
+-- DrawESP owns the label, but Ragebot can resolve a target before that draw
+-- pass.  Mirror the exact pawn state from CreateMove as well, so a click on
+-- any whitelist action is effective for the very next target calculation.
+local function whitelistCommand()
+    if whitelistEnabled:Get() ~= true then return end
+    local pawn = localPawn()
+    local team = entityTeam(pawn)
+    if type(team) ~= "number" then return end
+    local pawns = safeCall(function() return entities.FindByClass("C_CSPlayerPawn") end, {}) or {}
+    for i = 1, #pawns do
+        local entity = pawns[i]
+        if isEnemy(entity, team) then
+            local index = entityIndex(entity)
+            if index then
+                if protectedByIndex[index] == nil then
+                    protectedByIndex[index] = false
+                    refreshRequested = true
+                end
+                applyState(entity, index)
+            end
+        end
+    end
+end
+M._whitelistCommandCallback = whitelistCommand
+M._whitelistCommandActive = function() return whitelistEnabled:Get() == true end
+refreshPlayers()
+
+callbacks.Register("DrawESP", "rgnMultitool_WhitelistESP", function(esp)
+    if whitelistEnabled:Get() ~= true or not esp then return end
+    local entity = safeCall(function() return esp:GetEntity() end)
+    local pawn = localPawn()
+    if not entity or not pawn then return end
+    local team = entityTeam(pawn)
+    if not isEnemy(entity, team) or safeCall(function() return entity:IsAlive() end, false) ~= true then return end
+    local pawnIndex = entityIndex(entity)
+    if not pawnIndex then return end
+    if protectedByIndex[pawnIndex] == nil then protectedByIndex[pawnIndex] = false; refreshRequested = true end
+    local protected = applyState(entity, pawnIndex)
+    local color = protected and protectedColor:Get() or targetColor:Get()
+    if type(color) ~= "table" then color = protected and { 76, 201, 156, 255 } or { 255, 166, 74, 255 } end
+    pcall(function() esp:Color(unpack(color)) end)
+    pcall(function() esp:AddTextTop(protected and "WHITELISTED" or "TARGET") end)
+end)
+
+callbacks.Register("Unload", "rgnMultitool_WhitelistUnload", function()
+    cleanupImmortalStates()
+    pcall(callbacks.Unregister, "Draw", "rgnMultitool_WhitelistRefresh")
+    pcall(callbacks.Unregister, "DrawESP", "rgnMultitool_WhitelistESP")
+    if M._whitelistCommandCallback == whitelistCommand then M._whitelistCommandCallback = nil end
+    M._whitelistCommandActive = nil
+end)
+end)
+
 -- Aimware's anonymous event bridge is tokened so reloads cannot double-dispatch.
 do
     local callbackId = "rgnMultitool_GameEvents"
@@ -10607,7 +11810,7 @@ do
 end
 
 do
-    local wanted = { "WEAPONS", "AGENTS", "SKINS CUSTOM", "VIEWMODEL", "SCOPE OVERLAY", "CUSTOM SOUNDS", "MOVEMENT", "IDENTITY", "KILLSAY", "CONFIGS" }
+    local wanted = { "WEAPONS", "AGENTS", "SKINS CUSTOM", "VIEWMODEL", "SCOPE OVERLAY", "CUSTOM SOUNDS", "MOVEMENT", "REGION", "IDENTITY", "KILLSAY", "WHITELIST", "CONFIGS" }
     local byName, ordered = {}, {}
     for _, tab in ipairs(M._tabs) do byName[tab.name] = tab end
     for _, name in ipairs(wanted) do
