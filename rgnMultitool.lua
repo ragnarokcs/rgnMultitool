@@ -1,5 +1,5 @@
--- rgnMultitool 1.4.0
-local RGN_MULTITOOL_VERSION = "1.4.0"
+-- rgnMultitool 1.4.1
+local RGN_MULTITOOL_VERSION = "1.4.1"
 local RGN_MULTITOOL_SIGNATURE = "RGN_MULTITOOL_SOURCE_V1"
 _G.RGN_MULTITOOL_VERSION = RGN_MULTITOOL_VERSION
 
@@ -40,7 +40,8 @@ clearCallbacks({
     "rgnWEAPONS_LateMesh",
     "rgnMultitool_ManualAADraw", "rgnMultitool_ManualAAMove",
     "rgnMultitool_ManualAAUnload", "rgnMultitool_WhitelistRefresh",
-    "rgnMultitool_WhitelistESP", "rgnMultitool_WhitelistUnload",
+    "rgnMultitool_WhitelistPanel", "rgnMultitool_WhitelistESP", "rgnMultitool_WhitelistUnload",
+    "rgnMultitool_KillTimerDraw", "rgnMultitool_KillTimerUnload",
     "rgnMultitool_RegionDraw", "rgnMultitool_RegionUnload"
 })
 
@@ -1597,7 +1598,8 @@ local NAV_LABELS = {
     ["WEAPONS"] = "Weapons", ["AGENTS"] = "Agents", ["SKINS CUSTOM"] = "Custom skins",
     ["VIEWMODEL"] = "Viewmodel", ["SCOPE OVERLAY"] = "Scope overlay", ["CUSTOM SOUNDS"] = "Custom sounds",
     ["MOVEMENT"] = "Movement", ["REGION"] = "Region", ["IDENTITY"] = "Identity",
-    ["KILLSAY"] = "Killsay", ["WHITELIST"] = "Whitelist", ["CONFIGS"] = "Settings",
+    ["KILLSAY"] = "Killsay", ["KILL TIMER"] = "Kill timer",
+    ["WHITELIST"] = "Whitelist", ["CONFIGS"] = "Settings",
 }
 local HEADER_USER
 local function aimwareHeaderUser()
@@ -2091,6 +2093,21 @@ function M:Build(opts)
     -- Keep this dispatcher outside Draw so Lua does not allocate a fresh
     -- closure on every rendered frame.
     local function drawRuntimeOverlays(t)
+        local whitelistRuntimeActive = self._whitelistRuntimeActive
+        if type(self._whitelistRuntimeCallback) == "function"
+            and (type(whitelistRuntimeActive) ~= "function" or whitelistRuntimeActive()) then
+            local ok, err = pcall(self._whitelistRuntimeCallback)
+            self._whitelistRuntimeAliveAt = t
+            if ok then
+                self._whitelistRuntimeError = nil
+            else
+                local message = tostring(err)
+                if self._whitelistRuntimeError ~= message then
+                    self._whitelistRuntimeError = message
+                    print("[rgnWhitelist] main runtime error: " .. message)
+                end
+            end
+        end
         local movementDrawActive = self._movementDrawActive
         if type(self._movementDrawCallback) == "function"
             and (type(movementDrawActive) ~= "function" or movementDrawActive()) then
@@ -2162,6 +2179,21 @@ function M:Build(opts)
                 if self._whitelistDrawError ~= message then
                     self._whitelistDrawError = message
                     print("[rgnWhitelist] main Draw hook error: " .. message)
+                end
+            end
+        end
+        local killTimerDrawActive = self._killTimerDrawActive
+        if type(self._killTimerDrawCallback) == "function"
+            and (type(killTimerDrawActive) ~= "function" or killTimerDrawActive()) then
+            local ok, err = pcall(self._killTimerDrawCallback)
+            self._killTimerDrawAliveAt = t
+            if ok then
+                self._killTimerDrawError = nil
+            else
+                local message = tostring(err)
+                if self._killTimerDrawError ~= message then
+                    self._killTimerDrawError = message
+                    print("[rgnKillTimer] main Draw hook error: " .. message)
                 end
             end
         end
@@ -2393,6 +2425,7 @@ local inactiveColor = gui.ColorPicker(rbotAA, "manual_indicator_inactive", "Inac
 
 local manualState = 0 -- back, left, right, forward
 local jumpBugHeld, savedAutostrafe = false, nil
+local manualKeyHeld = { false, false, false }
 local capturedYaw, capturedPitch, capturedOriginals = nil, nil, false
 local wasEnabled = enabled:GetValue() == true
 local titleFont, rowFont
@@ -2425,19 +2458,29 @@ local function releaseJumpBug()
     setValue("misc.autostrafe", restore)
 end
 
+local function buttonDown(box)
+    local key = tonumber(box:GetValue()) or 0
+    if key == 0 then return false end
+    local down = false
+    pcall(function() down = input.IsButtonDown(key) == true end)
+    return down
+end
+
 local function checkHotkeys()
-    if enabled:GetValue() ~= true then
+    local active = enabled:GetValue() == true
+    local boxes = { keyLeft, keyRight, keyForward }
+    for i = 1, 3 do
+        local down = buttonDown(boxes[i])
+        if active and down and not manualKeyHeld[i] then
+            manualState = manualState == i and 0 or i
+        end
+        manualKeyHeld[i] = down
+    end
+
+    if not active then
         releaseJumpBug()
         return
     end
-
-    local function pressed(box)
-        local key = tonumber(box:GetValue()) or 0
-        return key ~= 0 and input.IsButtonPressed(key)
-    end
-    if pressed(keyLeft) then manualState = manualState == 1 and 0 or 1 end
-    if pressed(keyRight) then manualState = manualState == 2 and 0 or 2 end
-    if pressed(keyForward) then manualState = manualState == 3 and 0 or 3 end
 
     local jumpKey = tonumber(keyJumpBug:GetValue()) or 0
     local down = jumpKey ~= 0 and input.IsButtonDown(jumpKey) or false
@@ -2510,21 +2553,15 @@ local function restoreOrientation()
     capturedYaw, capturedPitch, capturedOriginals = nil, nil, false
 end
 
-local function manualDraw()
-    local current = enabled:GetValue() == true
-    if wasEnabled and not current then
-        releaseJumpBug()
-        restoreOrientation()
-    end
-    wasEnabled = current
-    drawIndicator()
+local function antiAimEnabled()
+    local value = getValue("rbot.antiaim.enabled")
+    local numeric = tonumber(value)
+    if numeric ~= nil then return numeric ~= 0 end
+    return value == true
 end
 
-local function manualMove()
-    -- Input belongs to the command-rate path; this avoids polling hotkeys at
-    -- the render frame rate on high-FPS clients.
-    checkHotkeys()
-    if enabled:GetValue() ~= true or not getValue("rbot.antiaim.enabled") then return end
+local function applyManualOrientation()
+    if enabled:GetValue() ~= true or not antiAimEnabled() then return end
     local player
     pcall(function() player = entities.GetLocalPlayer() end)
     if not player then pcall(function() player = entities.GetLocalPawn() end) end
@@ -2539,8 +2576,30 @@ local function manualMove()
     if manualState == 1 then yaw, pitch = -90, sidePitch
     elseif manualState == 2 then yaw, pitch = 90, sidePitch
     elseif manualState == 3 then yaw, pitch = 180, 1 end
-    pcall(function() yawOffsetRef:SetValue(yaw) end)
-    pcall(function() pitchRef:SetValue(pitch) end)
+
+    local currentYaw, currentPitch
+    pcall(function() currentYaw = yawOffsetRef:GetValue() end)
+    pcall(function() currentPitch = pitchRef:GetValue() end)
+    if currentYaw ~= yaw then pcall(function() yawOffsetRef:SetValue(yaw) end) end
+    if currentPitch ~= pitch then pcall(function() pitchRef:SetValue(pitch) end) end
+end
+
+local function manualDraw()
+    -- Draw and CreateMove share the same edge latch. Polling both paths keeps
+    -- short key taps reliable without ever toggling twice for one press.
+    checkHotkeys()
+    local current = enabled:GetValue() == true
+    if wasEnabled and not current then
+        releaseJumpBug()
+        restoreOrientation()
+    end
+    wasEnabled = current
+    drawIndicator()
+end
+
+local function manualMove()
+    checkHotkeys()
+    applyManualOrientation()
 end
 
 M._manualAADrawCallback = manualDraw
@@ -8948,8 +9007,15 @@ local armed = false
 local nextSessionPoll, nextListenerRefresh = 0, 0
 local lastSessionKey, sessionEpoch = nil, 0
 
+local function killTimerRequested()
+    local active = M._killTimerSignalActive
+    if type(active) ~= "function" then return false end
+    local ok, value = pcall(active)
+    return ok and value == true
+end
+
 M._killsayEventActive = function()
-    return armed == true
+    return armed == true or killTimerRequested()
 end
 
 local function requestKillsayListeners()
@@ -8958,11 +9024,13 @@ local function requestKillsayListeners()
         client.AllowListener("player_death")
         client.AllowListener("player_hurt")
         client.AllowListener("player_chat")
+        client.AllowListener("round_start")
         client.AllowListener("server_spawn")
         client.AllowListener("game_newmap")
         client.AllowListener("cs_game_disconnected")
     end)
 end
+M._killTimerListenerRefresh = requestKillsayListeners
 
 local function currentSessionKey()
     local server, map, localIndex = "", "", 0
@@ -9440,7 +9508,12 @@ M._killsayEventCallback = function(event)
         end
         return
     end
+    if eventName == "round_start" then
+        M._localRoundSerial = (tonumber(M._localRoundSerial) or 0) + 1
+        return
+    end
     if eventName == "server_spawn" or eventName == "game_newmap" or eventName == "cs_game_disconnected" then
+        M._localRoundSerial = (tonumber(M._localRoundSerial) or 0) + 1
         requestKillsayListeners()
         resetKillsaySession(eventName)
         return
@@ -9449,7 +9522,7 @@ M._killsayEventCallback = function(event)
     -- With Killsay disabled, deaths must be a true zero-work path. The stable
     -- build used to open/write its diagnostics file twice for every death in
     -- the server even though no message could be sent.
-    if not armed then return end
+    if not armed and not killTimerRequested() then return end
     callbackEvents = callbackEvents + 1
 
     -- Current CS2/Aimware exposes player_controller_and_pawn event members
@@ -9511,8 +9584,12 @@ M._killsayEventCallback = function(event)
         local signature, eventTime = "pawn:" .. tostring(attackerPawnIndex) .. ":" .. tostring(victimPawnIndex), now()
         if signature == lastDeathSignature and eventTime - lastDeathAt < 0.10 then return end
         lastDeathSignature, lastDeathAt = signature, eventTime
-        deathEvents, localKills = deathEvents + 1, localKills + 1
-        queueForVictim(victimName)
+        M._localKillSerial = (tonumber(M._localKillSerial) or 0) + 1
+        M._localKillAt = eventTime
+        if armed then
+            deathEvents, localKills = deathEvents + 1, localKills + 1
+            queueForVictim(victimName)
+        end
         return
     end
 
@@ -9574,6 +9651,9 @@ M._killsayEventCallback = function(event)
         return
     end
     if victimIndex == localIndex then return end
+    M._localKillSerial = (tonumber(M._localKillSerial) or 0) + 1
+    M._localKillAt = eventTime
+    if not armed then return end
     eventKillCredits = eventKillCredits + 1
     localKills = localKills + 1
     local legacyVictim = playerName(victimID, victimIndex or victimID % 32768)
@@ -9583,6 +9663,143 @@ end
 requestKillsayListeners()
 lastSessionKey = currentSessionKey()
 
+end)
+loadModule("KILL TIMER", function()
+local tab = M:Tab("KILL TIMER")
+tab:Row()
+local controls = tab:Section("Kill delay")
+local enabled = controls:Checkbox("Enable kill delay", false)
+local delay = controls:Slider("Delay after a kill", 5.0, 1.0, 15.0, 0.5, "%.1fs")
+local limit = controls:Slider("Round kill limit", 5, 1, 5, 1)
+local keepVisible = controls:Checkbox("Keep counter visible", false)
+
+tab:Col()
+local statusSection = tab:Section("Round status")
+local kills, deadline, cooling = 0, 0, false
+local status = "Disabled"
+local killSerial = tonumber(M._localKillSerial) or 0
+local roundSerial = tonumber(M._localRoundSerial) or 0
+local armed, previousEnabled = false, false
+local nextListenerRefresh, lastFrame, alpha = 0, 0, 0
+
+local function now()
+    local value
+    pcall(function() value = globals.RealTime() end)
+    if type(value) ~= "number" then pcall(function() value = globals.CurTime() end) end
+    return tonumber(value) or 0
+end
+
+local function reset(reason)
+    kills, deadline, cooling = 0, 0, false
+    killSerial = tonumber(M._localKillSerial) or 0
+    roundSerial = tonumber(M._localRoundSerial) or 0
+    status = enabled:Get() and (reason or "Ready") or "Disabled"
+end
+
+statusSection:Custom(76, function(ui)
+    local maximum = math.max(1, math.floor(tonumber(limit:Get()) or 5))
+    ui.label(string.format("Round kills: %d / %d", kills, maximum), ui.T.texthi)
+    ui.label(status, ui.T.textdim)
+    ui.label("Uses the existing local-kill detector.", ui.T.textdim)
+    ui.label("No additional game-event callback.", ui.T.textdim)
+end)
+statusSection:Button("Reset counter", function() reset("Manual reset") end)
+
+local font, smallFont
+pcall(function() font = draw.CreateFont("Segoe UI Semibold", 14, 700) end)
+pcall(function() smallFont = draw.CreateFont("Segoe UI", 12, 600) end)
+
+M._killTimerSignalActive = function() return armed == true end
+
+local function runtime()
+    local t = now()
+    local dt = lastFrame > 0 and math.max(0, math.min(0.10, t - lastFrame)) or 0
+    lastFrame = t
+    local requested = enabled:Get() == true
+    armed = requested
+
+    if requested ~= previousEnabled then
+        previousEnabled = requested
+        reset(requested and "Ready" or "Disabled")
+        nextListenerRefresh = 0
+    end
+
+    if requested and t >= nextListenerRefresh then
+        nextListenerRefresh = t + 2.0
+        local refresh = M._killTimerListenerRefresh
+        if type(refresh) == "function" then pcall(refresh) end
+    end
+
+    if requested then
+        local currentRound = tonumber(M._localRoundSerial) or 0
+        if currentRound ~= roundSerial then
+            reset("New round")
+            roundSerial = currentRound
+        end
+        local currentKills = tonumber(M._localKillSerial) or 0
+        if currentKills < killSerial then
+            killSerial = currentKills
+        elseif currentKills > killSerial then
+            kills = kills + (currentKills - killSerial)
+            killSerial = currentKills
+            deadline, cooling = t + math.max(1, tonumber(delay:Get()) or 5), true
+            local maximum = math.max(1, math.floor(tonumber(limit:Get()) or 5))
+            status = kills >= maximum and "ROUND LIMIT REACHED" or "Wait before the next kill"
+        end
+    end
+
+    local remaining = math.max(0, deadline - t)
+    if cooling and remaining <= 0 then
+        cooling = false
+        if kills < math.max(1, math.floor(tonumber(limit:Get()) or 5)) then status = "Ready" end
+    end
+
+    local visible = requested and (keepVisible:Get() == true or kills > 0 or cooling)
+    alpha = alpha + ((visible and 1 or 0) - alpha) * math.min(1, dt * 12)
+    if alpha < 0.01 then return end
+
+    local sw = select(1, draw.GetScreenSize())
+    if not sw then return end
+    local maximum = math.max(1, math.floor(tonumber(limit:Get()) or 5))
+    local danger = kills >= maximum
+    local width, height = 300, 52
+    local x, y = math.floor((sw - width) * 0.5), 120
+    draw.Color(7, 11, 17, math.floor(238 * alpha))
+    draw.FilledRect(x, y, x + width, y + height)
+    draw.Color(danger and 255 or 74, danger and 76 or 166, danger and 96 or 255, math.floor(255 * alpha))
+    draw.FilledRect(x, y, x + 3, y + height)
+    draw.OutlinedRect(x, y, x + width, y + height)
+    if font then draw.SetFont(font) end
+    draw.Color(238, 244, 252, math.floor(255 * alpha))
+    draw.Text(x + 14, y + 8, string.format("ROUND KILLS  %d / %d", kills, maximum))
+    if smallFont then draw.SetFont(smallFont) end
+    draw.Color(danger and 255 or 144, danger and 76 or 190, danger and 96 or 225, math.floor(255 * alpha))
+    local state = danger and "STOP ENGAGING" or (cooling and string.format("READY IN %.1fs", remaining) or "READY")
+    draw.Text(x + 14, y + 29, state)
+    local barX, barY, barW = x + 14, y + height - 6, width - 28
+    draw.Color(40, 45, 55, math.floor(130 * alpha))
+    draw.FilledRect(barX, barY, barX + barW, barY + 2)
+    local ratio = 0
+    if danger then ratio = 1
+    elseif cooling then ratio = math.max(0, math.min(1, remaining / math.max(1, tonumber(delay:Get()) or 5))) end
+    if ratio > 0 then
+        draw.Color(danger and 255 or 74, danger and 76 or 166, danger and 96 or 255, math.floor(235 * alpha))
+        draw.FilledRect(barX, barY, barX + math.floor(barW * ratio), barY + 2)
+    end
+end
+
+M._killTimerDrawCallback = runtime
+M._killTimerDrawActive = function()
+    return enabled:Get() == true or alpha > 0.01
+end
+callbacks.Register("Unload", "rgnMultitool_KillTimerUnload", function()
+    armed = false
+    pcall(callbacks.Unregister, "Draw", "rgnMultitool_KillTimerDraw")
+    if M._killTimerDrawCallback == runtime then M._killTimerDrawCallback = nil end
+    M._killTimerDrawActive = nil
+    M._killTimerSignalActive = nil
+    M._localKillSerial, M._localKillAt, M._localRoundSerial = nil, nil, nil
+end)
 end)
 loadModule("IDENTITY", function()
 local M = M
@@ -11400,6 +11617,7 @@ tab:Col()
 local controlSection = tab:Section("Whitelist control")
 local whitelistEnabled = controlSection:Checkbox("Enable whitelist", false)
 local forceAll = controlSection:Checkbox("Ignore whitelist / target everyone", false)
+local invertStatesKey = controlSection:Keybox("Invert TARGET / PROTECTED", 0)
 -- The original whitelist stored its state by C_CSPlayerPawn index.  Ragebot
 -- and DrawESP both receive that pawn, whereas a CCSPlayerController can keep
 -- a different index after a respawn or side change.  Keep the same identity
@@ -11409,15 +11627,32 @@ local refreshRequested = true
 local lastEnabled = false
 local detectionStatus = "Waiting for a match"
 local enforcementStatus = "Protection inactive"
+local whitelistBindHeld = false
+local invertModeActive = false
+local invertBaseStates = {}
 
 local colorSection = tab:Section("Visuals")
 local protectedColor = colorSection:ColorPicker("Protected color", { 76, 201, 156, 255 })
 local targetColor = colorSection:ColorPicker("Target color", { 255, 166, 74, 255 })
+local whitelistTitleFont, whitelistRowFont
+pcall(function() whitelistTitleFont = draw.CreateFont("Bahnschrift SemiBold", 15, 700) end)
+pcall(function() whitelistRowFont = draw.CreateFont("Bahnschrift", 13, 600) end)
+if not whitelistTitleFont then pcall(function() whitelistTitleFont = draw.CreateFont("Verdana", 13, 700) end) end
+if not whitelistRowFont then pcall(function() whitelistRowFont = draw.CreateFont("Verdana", 12, 600) end) end
 
 local function safeCall(fn, fallback)
     local ok, value = pcall(fn)
     if ok then return value end
     return fallback
+end
+
+local function whitelistClock()
+    local value = 0
+    pcall(function()
+        if type(common) == "table" and type(common.Time) == "function" then value = common.Time()
+        elseif type(globals) == "table" and type(globals.RealTime) == "function" then value = globals.RealTime() end
+    end)
+    return tonumber(value) or 0
 end
 
 local function entityIndex(entity)
@@ -11426,10 +11661,42 @@ local function entityIndex(entity)
 end
 
 local function entityTeam(entity)
+    if not entity then return nil end
     local value = safeCall(function() return tonumber(entity:GetTeamNumber()) end)
-    if value == nil then value = safeCall(function() return tonumber(entity:GetPropInt("m_iTeamNum")) end) end
-    if value == nil then value = safeCall(function() return tonumber(entity:GetFieldInt("m_iTeamNum")) end) end
+    if value ~= 2 and value ~= 3 then
+        value = safeCall(function() return tonumber(entity:GetPropInt("m_iTeamNum")) end)
+    end
+    if value ~= 2 and value ~= 3 then
+        value = safeCall(function() return tonumber(entity:GetFieldInt("m_iTeamNum")) end)
+    end
+    if value ~= 2 and value ~= 3 then
+        local controller = safeCall(function() return entity:GetFieldEntity("m_hOriginalController") end)
+        if controller and controller ~= entity then
+            value = safeCall(function() return tonumber(controller:GetTeamNumber()) end)
+            if value ~= 2 and value ~= 3 then
+                value = safeCall(function() return tonumber(controller:GetPropInt("m_iTeamNum")) end)
+            end
+            if value ~= 2 and value ~= 3 then
+                value = safeCall(function() return tonumber(controller:GetFieldInt("m_iTeamNum")) end)
+            end
+        end
+    end
     return value
+end
+
+-- Keep the exact local-pawn route used by the standalone whitelist.  Some
+-- Aimware builds briefly report team 0 while the CS2 pawn is already valid;
+-- rejecting that transition was the reason the integrated list stayed empty.
+local function localPawnAndTeam()
+    local pawn = safeCall(function() return entities.GetLocalPawn() end)
+    if pawn == nil then pawn = safeCall(function() return entities.GetLocalPlayer() end) end
+    if not pawn then return nil, nil end
+    return pawn, entityTeam(pawn)
+end
+
+local function whitelistSessionReady()
+    local pawn = localPawnAndTeam()
+    return pawn ~= nil
 end
 
 local function fieldBool(entity, name)
@@ -11469,10 +11736,8 @@ local function cleanupImmortalStates()
     local pawns = safeCall(function() return entities.FindByClass("C_CSPlayerPawn") end, {}) or {}
     for i = 1, #pawns do
         local entity = pawns[i]
-        if safeCall(function() return entity:IsPlayer() end, false) then setImmortal(entity, false) end
+        if entity and safeCall(function() return entity:IsPlayer() end, false) then setImmortal(entity, false) end
     end
-    local controllers = safeCall(function() return entities.FindByClass("CCSPlayerController") end, {}) or {}
-    for i = 1, #controllers do setImmortal(controllerPawn(controllers[i]), false) end
 end
 
 local function cleanPlayerName(value)
@@ -11529,12 +11794,6 @@ local function playerName(entity, controller)
     return name or ("Player #" .. tostring(controllerIndex or pawnIndex or "?"))
 end
 
-local function localPawn()
-    local pawn = safeCall(function() return entities.GetLocalPawn() end)
-    if pawn == nil then pawn = safeCall(function() return entities.GetLocalPlayer() end) end
-    return pawn
-end
-
 local function isEnemy(entity, team)
     if not entity or safeCall(function() return entity:IsPlayer() end, false) ~= true then return false end
     local otherTeam = entityTeam(entity)
@@ -11550,22 +11809,37 @@ end
 
 local function refreshPlayers()
     local current, rows = {}, {}
-    local pawn = localPawn()
-    local team = entityTeam(pawn)
+    local pawn, team = localPawnAndTeam()
     local pawns = safeCall(function() return entities.FindByClass("C_CSPlayerPawn") end, {}) or {}
+    local localIndex = entityIndex(pawn)
+
+    if not pawn or type(team) ~= "number" then
+        detectionStatus = "Waiting for a match"
+        enforcementStatus = "Protection inactive"
+    end
+
+    -- Match the standalone whitelist's cleanup/reapply cycle, but only while
+    -- enforcement is enabled.  All writes use entities returned by this scan;
+    -- no pawn userdata is retained across a respawn, map or side change.
+    if whitelistEnabled:Get() == true then
+        for i = 1, #pawns do
+            local entity = pawns[i]
+            if entity and safeCall(function() return entity:IsPlayer() end, false) then setImmortal(entity, false) end
+        end
+    end
 
     -- This is intentionally the original whitelist enumeration path.  It is
     -- the only source used for the row key and for the immunity write below.
-    if type(team) == "number" then
+    if pawn and type(team) == "number" then
         for i = 1, #pawns do
             local entity = pawns[i]
-            if isEnemy(entity, team) then
-                local index = entityIndex(entity)
+            local index = entityIndex(entity)
+            if index and index ~= localIndex and isEnemy(entity, team) then
                 if index then
                     if protectedByIndex[index] == nil then protectedByIndex[index] = false end
-                    current[index] = entity
-                    applyState(entity, index)
-                    rows[#rows + 1] = { index = index, entity = entity, name = playerName(entity) }
+                    current[index] = true
+                    if whitelistEnabled:Get() == true then applyState(entity, index) end
+                    rows[#rows + 1] = { index = index, name = playerName(entity) }
                 end
             end
         end
@@ -11575,18 +11849,15 @@ local function refreshPlayers()
     if whitelistEnabled:Get() == true then
         local protectedCount = 0
         if forceAll:Get() ~= true then
-            for index, entity in pairs(current) do
-                if entity and protectedByIndex[index] == true then protectedCount = protectedCount + 1 end
+            for index in pairs(current) do
+                if protectedByIndex[index] == true then protectedCount = protectedCount + 1 end
             end
         end
         enforcementStatus = string.format("Protected: %d | Targets: %d", protectedCount, math.max(0, #rows - protectedCount))
     else
         enforcementStatus = "Protection inactive"
     end
-    for index, entity in pairs(knownEntities) do
-        if current[index] == nil or current[index] ~= entity then
-            setImmortal(entity, false)
-        end
+    for index in pairs(knownEntities) do
         if current[index] == nil then
             protectedByIndex[index] = nil
         end
@@ -11620,11 +11891,51 @@ local function selectedRow()
     return rowsBySelection[tonumber(playerList:Get()) or 1]
 end
 
+local function invertCurrentStates()
+    if whitelistEnabled:Get() ~= true then return end
+    forceAll:Set(false)
+    local changed = 0
+    if not invertModeActive then
+        invertBaseStates = {}
+        for index in pairs(knownEntities) do
+            local original = protectedByIndex[index] == true
+            invertBaseStates[index] = original
+            protectedByIndex[index] = not original
+            changed = changed + 1
+        end
+        if changed > 0 then invertModeActive = true end
+    else
+        for index in pairs(knownEntities) do
+            local original = invertBaseStates[index]
+            if original ~= nil then
+                protectedByIndex[index] = original
+                changed = changed + 1
+            end
+        end
+        invertModeActive = false
+        invertBaseStates = {}
+    end
+    if changed > 0 then
+        refreshRequested = true
+    end
+end
+
+local function pollInvertKey()
+    local key = tonumber(invertStatesKey:Get()) or 0
+    local down = false
+    if key ~= 0 then
+        pcall(function() down = input.IsButtonDown(key) and true or false end)
+    end
+    local pressed = down and not whitelistBindHeld
+    whitelistBindHeld = down
+    if pressed then invertCurrentStates() end
+end
+
 controlSection:Button("Toggle selected protection", function()
     local row = selectedRow()
     if not row then M:Notify("select an enemy first", "info"); return end
     protectedByIndex[row.index] = not (protectedByIndex[row.index] == true)
-    applyState(row.entity, row.index)
+    refreshRequested = true
     refreshPlayers()
 end)
 controlSection:Button("Protect every enemy", function()
@@ -11656,7 +11967,48 @@ statusSection:Custom(72, function(ui)
     ui.label(enforcementStatus, ui.T.textdim)
 end)
 
-cleanupImmortalStates()
+-- Uses the main multitool Draw dispatcher, just like Manual AA.  It reads the
+-- already validated rows and never performs an entity scan of its own.
+local function drawWhitelistHud()
+    if whitelistEnabled:Get() ~= true then return end
+    local count = math.min(#rowsBySelection, 5)
+    if count <= 0 then return end
+
+    local _, sh = draw.GetScreenSize()
+    if not sh then return end
+    local x = 11
+    local manualY = math.min(math.max(120, math.floor(sh * 0.55)), sh - 92)
+    local y = math.min(manualY + 84, sh - (28 + count * 18))
+    local width = 214
+
+    if whitelistTitleFont then draw.SetFont(whitelistTitleFont) end
+    draw.Color(8, 12, 18, 205)
+    draw.FilledRect(x, y, x + width, y + 18)
+    draw.Color(74, 166, 255, 235)
+    draw.FilledRect(x, y, x + 3, y + 18)
+    draw.Color(226, 232, 240, 245)
+    draw.Text(x + 9, y + 2, "WHITELIST")
+
+    if whitelistRowFont then draw.SetFont(whitelistRowFont) end
+    for i = 1, count do
+        local row = rowsBySelection[i]
+        if row then
+            local protected = forceAll:Get() ~= true and protectedByIndex[row.index] == true
+            local rowY = y + 22 + (i - 1) * 18
+            local name = tostring(row.name or ("Player #" .. tostring(row.index)))
+            if #name > 19 then name = name:sub(1, 18) .. "..." end
+            draw.Color(7, 10, 15, 180)
+            draw.FilledRect(x, rowY, x + width, rowY + 15)
+            if protected then draw.Color(76, 201, 156, 255)
+            else draw.Color(255, 166, 74, 255) end
+            draw.FilledRect(x, rowY, x + 3, rowY + 15)
+            draw.Text(x + 9, rowY + 1, protected and "PROTECTED" or "TARGET")
+            draw.Color(211, 218, 229, 245)
+            draw.Text(x + 91, rowY + 1, name)
+        end
+    end
+end
+
 local function clock()
     local value = 0
     pcall(function()
@@ -11668,7 +12020,11 @@ end
 local nextRefresh = 0
 local function whitelistRuntime()
     local currentEnabled = whitelistEnabled:Get() == true
-    if lastEnabled and not currentEnabled then cleanupImmortalStates() end
+    if lastEnabled and not currentEnabled then
+        cleanupImmortalStates()
+        invertModeActive, invertBaseStates = false, {}
+        whitelistBindHeld = false
+    end
     if currentEnabled and not lastEnabled then refreshRequested = true end
     lastEnabled = currentEnabled
     local t = clock()
@@ -11677,22 +12033,31 @@ local function whitelistRuntime()
         nextRefresh = t + 0.35
         refreshPlayers()
     end
+    -- Key input only transforms an already validated list. It never starts a
+    -- nested entity scan, so detection remains identical with or without a bind.
+    if currentEnabled then pollInvertKey()
+    else whitelistBindHeld = false end
 end
-callbacks.Register("Draw", "rgnMultitool_WhitelistRefresh", whitelistRuntime)
+-- Run from the already proven UI/overlay dispatcher.  Registering another
+-- named Draw callback can silently collide with a stale callback after a Lua
+-- reload, leaving the initial "Waiting for a match" text forever.
+M._whitelistRuntimeCallback = whitelistRuntime
+M._whitelistRuntimeActive = function() return true end
 
 -- DrawESP owns the label, but Ragebot can resolve a target before that draw
 -- pass.  Mirror the exact pawn state from CreateMove as well, so a click on
 -- any whitelist action is effective for the very next target calculation.
 local function whitelistCommand()
+    pollInvertKey()
     if whitelistEnabled:Get() ~= true then return end
-    local pawn = localPawn()
-    local team = entityTeam(pawn)
-    if type(team) ~= "number" then return end
+    local pawn, team = localPawnAndTeam()
+    if not pawn or type(team) ~= "number" then return end
+    local localIndex = entityIndex(pawn)
     local pawns = safeCall(function() return entities.FindByClass("C_CSPlayerPawn") end, {}) or {}
     for i = 1, #pawns do
         local entity = pawns[i]
-        if isEnemy(entity, team) then
-            local index = entityIndex(entity)
+        local index = entityIndex(entity)
+        if index and index ~= localIndex and isEnemy(entity, team) then
             if index then
                 if protectedByIndex[index] == nil then
                     protectedByIndex[index] = false
@@ -11704,15 +12069,18 @@ local function whitelistCommand()
     end
 end
 M._whitelistCommandCallback = whitelistCommand
-M._whitelistCommandActive = function() return whitelistEnabled:Get() == true end
-refreshPlayers()
+M._whitelistCommandActive = function()
+    return whitelistEnabled:Get() == true
+end
+M._whitelistDrawCallback = drawWhitelistHud
+M._whitelistDrawActive = function() return whitelistEnabled:Get() == true end
 
 callbacks.Register("DrawESP", "rgnMultitool_WhitelistESP", function(esp)
     if whitelistEnabled:Get() ~= true or not esp then return end
     local entity = safeCall(function() return esp:GetEntity() end)
-    local pawn = localPawn()
+    local pawn, team = localPawnAndTeam()
     if not entity or not pawn then return end
-    local team = entityTeam(pawn)
+    if entityIndex(entity) == entityIndex(pawn) then return end
     if not isEnemy(entity, team) or safeCall(function() return entity:IsAlive() end, false) ~= true then return end
     local pawnIndex = entityIndex(entity)
     if not pawnIndex then return end
@@ -11727,9 +12095,14 @@ end)
 callbacks.Register("Unload", "rgnMultitool_WhitelistUnload", function()
     cleanupImmortalStates()
     pcall(callbacks.Unregister, "Draw", "rgnMultitool_WhitelistRefresh")
+    pcall(callbacks.Unregister, "Draw", "rgnMultitool_WhitelistPanel")
     pcall(callbacks.Unregister, "DrawESP", "rgnMultitool_WhitelistESP")
     if M._whitelistCommandCallback == whitelistCommand then M._whitelistCommandCallback = nil end
+    if M._whitelistDrawCallback == drawWhitelistHud then M._whitelistDrawCallback = nil end
+    if M._whitelistRuntimeCallback == whitelistRuntime then M._whitelistRuntimeCallback = nil end
     M._whitelistCommandActive = nil
+    M._whitelistDrawActive = nil
+    M._whitelistRuntimeActive = nil
 end)
 end)
 
@@ -11801,6 +12174,7 @@ do
         end
         M._killsayEventCallback = nil
         M._killsayEventActive = nil
+        M._killTimerListenerRefresh = nil
         M._customSoundsEventCallback = nil
         M._customSoundsEventActive = nil
         M._voteEventCallback = nil
@@ -11810,7 +12184,7 @@ do
 end
 
 do
-    local wanted = { "WEAPONS", "AGENTS", "SKINS CUSTOM", "VIEWMODEL", "SCOPE OVERLAY", "CUSTOM SOUNDS", "MOVEMENT", "REGION", "IDENTITY", "KILLSAY", "WHITELIST", "CONFIGS" }
+    local wanted = { "WEAPONS", "AGENTS", "SKINS CUSTOM", "VIEWMODEL", "SCOPE OVERLAY", "CUSTOM SOUNDS", "MOVEMENT", "REGION", "IDENTITY", "KILLSAY", "KILL TIMER", "WHITELIST", "CONFIGS" }
     local byName, ordered = {}, {}
     for _, tab in ipairs(M._tabs) do byName[tab.name] = tab end
     for _, name in ipairs(wanted) do

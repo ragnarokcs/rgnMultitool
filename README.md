@@ -105,6 +105,7 @@ Click any preview to open the full-size image.
 - The **Region** module reads CS2's public Steam relay latency data, orders recognized relays from lowest to highest measured latency and uses a green-to-yellow-to-red latency range.
 - Select one or more relays and apply the preference; when multiple relays are selected, the lowest measured latency is used for the official relay preference.
 - The **Whitelist** module refreshes the active enemy roster on joins, spawns and team changes. Enemies begin as valid targets; selected players can be protected locally from targeting, with the target state applied immediately after every UI change.
+- The optional **Kill Timer** tracks local round kills, shows a compact animated delay HUD and supports a configurable limit of up to five opponents.
 
 ### Scope overlay
 

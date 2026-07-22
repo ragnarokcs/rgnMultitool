@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.4.1 - 2026-07-22
+
+### Whitelist and local control reliability
+
+- Fixed Whitelist enemy discovery after Lua reloads and routed its refresh through the stable shared runtime dispatcher.
+- Added a compact live Whitelist HUD and a configurable edge-triggered bind that swaps current TARGET and PROTECTED states.
+- Prevented stale pawn references from surviving respawns, team changes or map transitions.
+- Fixed intermittent Manual AA direction keys and preserved their compact indicators.
+- Added the opt-in Kill Timer with a local-kill counter, configurable delay and animated round-status HUD.
+
 ## 1.4.0 - 2026-07-22
 
 ### Local controls, region preference and interface refinement
