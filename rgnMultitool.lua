@@ -1,5 +1,5 @@
--- rgnMultitool 1.4.1
-local RGN_MULTITOOL_VERSION = "1.4.1"
+-- rgnMultitool 1.4.2
+local RGN_MULTITOOL_VERSION = "1.4.2"
 local RGN_MULTITOOL_SIGNATURE = "RGN_MULTITOOL_SOURCE_V1"
 _G.RGN_MULTITOOL_VERSION = RGN_MULTITOOL_VERSION
 
@@ -2405,6 +2405,222 @@ local function loadModule(name, fn)
     return true
 end
 
+-- Portable asset discovery shared by Custom skins and Custom sounds.
+-- The old ANSI WinAPI path worked on the author's PC, but silently returned
+-- an empty catalogue when a Steam library contained non-ASCII characters.
+-- Keep all paths UTF-8 in Lua and use the wide Windows APIs at the boundary.
+local RGN_ASSET_FS = {
+    available = false,
+    reason = "Allow insecure FFI is disabled",
+}
+
+do
+    local f = rawget(_G, "ffi")
+    local bitlib = rawget(_G, "bit") or rawget(_G, "bit32")
+    if type(f) == "table" and type(bitlib) == "table" then
+        pcall(function() f.cdef[[
+            typedef struct {
+                uint32_t attributes;
+                uint32_t creation_lo, creation_hi;
+                uint32_t access_lo, access_hi;
+                uint32_t write_lo, write_hi;
+                uint32_t size_hi, size_lo;
+                uint32_t reserved0, reserved1;
+                uint16_t filename[260];
+                uint16_t alternate[14];
+            } RGN_ASSET_FIND_DATAW;
+            void* GetModuleHandleA(const char*);
+            void* GetProcAddress(void*, const char*);
+        ]] end)
+
+        local ok, err = pcall(function()
+            local kernel32 = f.C.GetModuleHandleA("kernel32.dll")
+            if kernel32 == nil then error("kernel32 unavailable") end
+
+            local function proc(name, ctype)
+                local address = f.C.GetProcAddress(kernel32, name)
+                if address == nil then error(name .. " unavailable") end
+                return f.cast(ctype, address)
+            end
+
+            local getCurrentDirectoryW = proc(
+                "GetCurrentDirectoryW",
+                "uint32_t(*)(uint32_t, uint16_t*)"
+            )
+            local getModuleFileNameW = proc(
+                "GetModuleFileNameW",
+                "uint32_t(*)(void*, uint16_t*, uint32_t)"
+            )
+            local findFirstW = proc(
+                "FindFirstFileW",
+                "void*(*)(const uint16_t*, void*)"
+            )
+            local findNextW = proc(
+                "FindNextFileW",
+                "int(*)(void*, void*)"
+            )
+            local findCloseW = proc("FindClose", "int(*)(void*)")
+            local createDirectoryW = proc(
+                "CreateDirectoryW",
+                "int(*)(const uint16_t*, void*)"
+            )
+            local multiByteToWide = proc(
+                "MultiByteToWideChar",
+                "int(*)(uint32_t, uint32_t, const char*, int, uint16_t*, int)"
+            )
+            local wideToMultiByte = proc(
+                "WideCharToMultiByte",
+                "int(*)(uint32_t, uint32_t, const uint16_t*, int, char*, int, const char*, int*)"
+            )
+
+            local CP_UTF8 = 65001
+            local INVALID = f.cast("void*", f.cast("intptr_t", -1))
+            local cachedRoot
+
+            local function utf8ToWide(text)
+                text = tostring(text or "")
+                local count = multiByteToWide(CP_UTF8, 0, text, #text, nil, 0)
+                if not count or count <= 0 then return nil end
+                local buffer = f.new("uint16_t[?]", count + 1)
+                if multiByteToWide(CP_UTF8, 0, text, #text, buffer, count) <= 0 then
+                    return nil
+                end
+                buffer[count] = 0
+                return buffer
+            end
+
+            local function wideToUtf8(buffer, count)
+                if buffer == nil then return nil end
+                if not count then
+                    count = 0
+                    while count < 32767 and buffer[count] ~= 0 do count = count + 1 end
+                end
+                if count <= 0 then return "" end
+                local bytes = wideToMultiByte(CP_UTF8, 0, buffer, count, nil, 0, nil, nil)
+                if not bytes or bytes <= 0 then return nil end
+                local output = f.new("char[?]", bytes + 1)
+                if wideToMultiByte(CP_UTF8, 0, buffer, count, output, bytes, nil, nil) <= 0 then
+                    return nil
+                end
+                output[bytes] = 0
+                return f.string(output, bytes)
+            end
+
+            local function deriveCsgoRoot(path)
+                if type(path) ~= "string" or path == "" then return nil end
+                local normalized = path:gsub("/", "\\"):gsub("\\+$", "")
+                local lower = normalized:lower()
+                if lower:sub(-5) == "\\csgo" then return normalized end
+                local executableSuffix = "\\bin\\win64\\cs2.exe"
+                if lower:sub(-#executableSuffix) == executableSuffix then
+                    return normalized:sub(1, #normalized - #executableSuffix) .. "\\csgo"
+                end
+                local marker = "\\bin\\win64"
+                local position = lower:find(marker, 1, true)
+                if position then return normalized:sub(1, position - 1) .. "\\csgo" end
+                return nil
+            end
+
+            local function gameRoot()
+                if cachedRoot then return cachedRoot end
+                local buffer = f.new("uint16_t[32768]")
+                local count = getModuleFileNameW(nil, buffer, 32768)
+                if count and count > 0 and count < 32768 then
+                    cachedRoot = deriveCsgoRoot(wideToUtf8(buffer, count))
+                    if cachedRoot then return cachedRoot end
+                end
+                count = getCurrentDirectoryW(32768, buffer)
+                if count and count > 0 and count < 32768 then
+                    cachedRoot = deriveCsgoRoot(wideToUtf8(buffer, count))
+                end
+                return cachedRoot
+            end
+
+            local function hasAttribute(value, flag)
+                return bitlib.band(tonumber(value) or 0, flag) ~= 0
+            end
+
+            function RGN_ASSET_FS.resolve(relativeDirectory)
+                local root = gameRoot()
+                if not root then return nil, "CS2 game/csgo folder could not be resolved" end
+                relativeDirectory = tostring(relativeDirectory or ""):gsub("/", "\\")
+                relativeDirectory = relativeDirectory:gsub("^\\+", ""):gsub("\\+$", "")
+                if relativeDirectory == "" then return root end
+                return root .. "\\" .. relativeDirectory
+            end
+
+            function RGN_ASSET_FS.ensureDirectory(relativeDirectory)
+                local path, reason = RGN_ASSET_FS.resolve(relativeDirectory)
+                if not path then return nil, reason end
+                local wide = utf8ToWide(path)
+                if not wide then return nil, "folder path is not valid UTF-8" end
+                pcall(createDirectoryW, wide, nil)
+                return path
+            end
+
+            function RGN_ASSET_FS.scan(relativeDirectory, extension, maxDepth, maxFiles)
+                local root = gameRoot()
+                if not root then
+                    return nil, nil, nil, "CS2 game/csgo folder could not be resolved"
+                end
+
+                relativeDirectory = tostring(relativeDirectory or ""):gsub("/", "\\")
+                relativeDirectory = relativeDirectory:gsub("^\\+", ""):gsub("\\+$", "")
+                extension = tostring(extension or ""):lower()
+                maxDepth = math.max(0, tonumber(maxDepth) or 8)
+                maxFiles = math.max(1, tonumber(maxFiles) or 20000)
+
+                local base = relativeDirectory == "" and root or (root .. "\\" .. relativeDirectory)
+                local files, rootOpened, capped = {}, false, false
+
+                local function walk(directory, relative, depth)
+                    if depth > maxDepth or capped then return end
+                    local pattern = utf8ToWide(directory .. "\\*")
+                    if not pattern then return end
+                    local data = f.new("RGN_ASSET_FIND_DATAW")
+                    local handle = findFirstW(pattern, data)
+                    if handle == nil or handle == INVALID then return end
+                    if depth == 0 then rootOpened = true end
+
+                    repeat
+                        local name = wideToUtf8(data.filename)
+                        if name and name ~= "." and name ~= ".." then
+                            local childRelative = relative == "" and name or (relative .. "\\" .. name)
+                            local attributes = tonumber(data.attributes) or 0
+                            if hasAttribute(attributes, 0x10) then
+                                -- Do not follow junctions/symlinks outside the asset folder.
+                                if not hasAttribute(attributes, 0x400) then
+                                    walk(directory .. "\\" .. name, childRelative, depth + 1)
+                                end
+                            elseif extension == "" or name:lower():sub(-#extension) == extension then
+                                files[#files + 1] = childRelative
+                                if #files >= maxFiles then capped = true end
+                            end
+                        end
+                    until capped or findNextW(handle, data) == 0
+                    findCloseW(handle)
+                end
+
+                walk(base, "", 0)
+                if not rootOpened then
+                    return {}, root, base, "folder not found or not readable: " .. base
+                end
+                table.sort(files, function(a, b) return a:lower() < b:lower() end)
+                local reason = capped and ("catalogue limited to " .. tostring(maxFiles) .. " files") or nil
+                return files, root, base, reason
+            end
+
+            RGN_ASSET_FS.available = true
+            RGN_ASSET_FS.reason = nil
+        end)
+
+        if not ok then
+            RGN_ASSET_FS.available = false
+            RGN_ASSET_FS.reason = tostring(err)
+        end
+    end
+end
+
 loadModule("MANUAL AA", function()
 -- Native Aimware controls stay under Ragebot > Anti-Aim. Runtime drawing and
 -- callbacks are owned by rgnMultitool so reloading cannot duplicate them.
@@ -3156,20 +3372,53 @@ local function listCharacterModels(directory, root, output)
 end
 
 local root
+local characterScanFolder
+local characterScanReason
 if type(ffi) == "table" and type(bit_) == "table" then
-    local rootOk, resolvedRoot = pcall(charactersGameRoot)
-    if rootOk then root = resolvedRoot end
-    if root then
-        local ok, err = pcall(listCharacterModels, root .. "\\characters", root, VALIDATED_MODELS)
-        if not ok then
-            VALIDATED_MODELS = {}
-            print("[rgnSkins] characters listing failed: " .. tostring(err))
+    if RGN_ASSET_FS.available then
+        local ok, files, resolvedRoot, folder, reason = pcall(
+            RGN_ASSET_FS.scan,
+            "characters",
+            ".vmdl_c",
+            16,
+            20000
+        )
+        if ok and type(files) == "table" then
+            root, characterScanFolder, characterScanReason = resolvedRoot, folder, reason
+            for _, relative in ipairs(files) do
+                local normalized = tostring(relative):gsub("\\", "/")
+                local filename = normalized:match("([^/]+)$") or normalized
+                local sourcePath = "characters/" .. normalized:sub(1, #normalized - 2)
+                if not BLOCKED_MODEL_PATHS[sourcePath:lower()] then
+                    VALIDATED_MODELS[#VALIDATED_MODELS + 1] = {
+                        name = filename:sub(1, #filename - 7),
+                        path = sourcePath,
+                    }
+                end
+            end
+        else
+            characterScanReason = ok and "portable scanner returned no catalogue" or tostring(files)
         end
     else
-        print("[rgnSkins] game/csgo/characters could not be resolved on this PC")
+        characterScanReason = RGN_ASSET_FS.reason
+        local rootOk, resolvedRoot = pcall(charactersGameRoot)
+        if rootOk then root = resolvedRoot end
+        if root then
+            characterScanFolder = root .. "\\characters"
+            local ok, err = pcall(listCharacterModels, characterScanFolder, root, VALIDATED_MODELS)
+            if not ok then
+                VALIDATED_MODELS = {}
+                characterScanReason = tostring(err)
+            end
+        end
     end
 else
-    print("[rgnSkins] FFI unavailable: enable 'Allow insecure FFI' and rerun")
+    characterScanReason = "Allow insecure FFI is disabled"
+end
+
+if #VALIDATED_MODELS == 0 then
+    print("[rgnSkins] catalogue empty: " .. tostring(characterScanReason or "no compiled .vmdl_c files found"))
+    print("[rgnSkins] expected folder: " .. tostring(characterScanFolder or "game\\csgo\\characters"))
 end
 
 table.sort(VALIDATED_MODELS, function(a, b)
@@ -3323,10 +3572,19 @@ safetySection:Button("Portable status / requirements", function()
     if setModelError then
         M:Notify("SetModel unavailable; check console", "error")
     elseif #VALIDATED_MODELS == 0 then
-        M:Notify("no models: copy the complete csgo/characters folder", "error")
+        print("[rgnSkins] scan reason: " .. tostring(characterScanReason or "no compiled files"))
+        print("[rgnSkins] scan folder: " .. tostring(characterScanFolder or "game\\csgo\\characters"))
+        if tostring(characterScanReason):find("FFI", 1, true) then
+            M:Notify("enable Allow insecure FFI, then rerun", "error")
+        elseif tostring(characterScanReason):find("folder", 1, true) then
+            M:Notify("game/csgo/characters was not found", "error")
+        else
+            M:Notify("no compiled .vmdl_c models found", "error")
+        end
     elseif not SetModel.persistence then
         M:Notify(tostring(#VALIDATED_MODELS) .. " models | enable file permission to save", "info")
     else
+        print("[rgnSkins] scan folder: " .. tostring(characterScanFolder or "game\\csgo\\characters"))
         M:Notify(tostring(#VALIDATED_MODELS) .. " models | portable setup ready", "success")
     end
 end)
@@ -8251,6 +8509,7 @@ local CONFIG_FILE = "rgncustomsounds_config.txt"
 local f = rawget(_G, "ffi")
 local config = {}
 local soundDir, soundNames, soundPaths = nil, {}, {}
+local soundScanReason
 local hitComboWidget, killComboWidget
 local nextConfigPoll, nextListenerRefresh, observedConfig = 0, 0, nil
 
@@ -8342,6 +8601,11 @@ local function deriveCsgoRoot(path)
 end
 
 local function resolveSoundDirectory()
+    if RGN_ASSET_FS.available then
+        local path, reason = RGN_ASSET_FS.resolve("sounds")
+        soundScanReason = reason
+        return path
+    end
     if not getCurrentDirectoryA or not getModuleFileNameA or type(f) ~= "table" then return nil end
     local buffer = f.new("char[1024]")
     local count = getCurrentDirectoryA(1024, buffer)
@@ -8358,6 +8622,11 @@ local function resolveSoundDirectory()
 end
 
 local function ensureSoundDirectory()
+    if RGN_ASSET_FS.available then
+        local path, reason = RGN_ASSET_FS.ensureDirectory("sounds")
+        soundDir, soundScanReason = path, reason
+        return soundDir ~= nil
+    end
     if not soundDir then soundDir = resolveSoundDirectory() end
     if soundDir and createDirectoryA then pcall(createDirectoryA, soundDir, nil) end
     return soundDir ~= nil
@@ -8403,13 +8672,46 @@ end
 
 local function scanSounds()
     local names, paths = {}, {}
+    if RGN_ASSET_FS.available then
+        local ok, files, _, folder, reason = pcall(
+            RGN_ASSET_FS.scan,
+            "sounds",
+            ".vsnd_c",
+            12,
+            10000
+        )
+        if not ok then
+            soundScanReason = tostring(files)
+            print("[rgnSounds] scan failed: " .. soundScanReason)
+            return { "[ custom sounds unavailable; check console ]" }, paths
+        end
+        soundDir, soundScanReason = folder or soundDir, reason
+        for _, relative in ipairs(files or {}) do
+            relative = tostring(relative)
+            if relative:lower():sub(-7) == ".vsnd_c" and safeRelativeSoundPath(relative) then
+                paths[#paths + 1] = relative:sub(1, #relative - 7)
+            end
+        end
+        table.sort(paths, function(a, b) return a:lower() < b:lower() end)
+        for i = 1, #paths do names[i] = paths[i] end
+        if #names == 0 then
+            soundScanReason = soundScanReason or "no compiled .vsnd_c files found"
+            names[1] = "[ put compiled .vsnd_c in csgo\\sounds ]"
+        end
+        return names, paths
+    end
+
+    soundScanReason = RGN_ASSET_FS.reason
     if not ensureSoundDirectory() or not findFirstA or not findNextA or not findClose or type(f) ~= "table" then
         return { "[ csgo\\sounds unavailable ]" }, paths
     end
     scanSoundDirectory(soundDir, "", paths, 0)
     table.sort(paths, function(a, b) return a:lower() < b:lower() end)
     for i = 1, #paths do names[i] = paths[i] end
-    if #names == 0 then names[1] = "[ put .vsnd_c in csgo\\sounds ]" end
+    if #names == 0 then
+        soundScanReason = soundScanReason or "no compiled .vsnd_c files found"
+        names[1] = "[ put compiled .vsnd_c in csgo\\sounds ]"
+    end
     return names, paths
 end
 
@@ -8490,6 +8792,10 @@ local function refreshSounds()
     observedConfig = currentSnapshot()
     saveConfig()
     print(string.format("[rgnSounds] refreshed: %d .vsnd_c files in %s", #soundPaths, tostring(soundDir or "unresolved")))
+    if #soundPaths == 0 then
+        print("[rgnSounds] scan reason: " .. tostring(soundScanReason or "no compiled files"))
+        print("[rgnSounds] expected folder: " .. tostring(soundDir or "game\\csgo\\sounds"))
+    end
 end
 
 librarySection:Button("Preview hit sound", function()
@@ -8508,7 +8814,19 @@ librarySection:Button("Open sounds folder", function()
 end)
 librarySection:Custom(44, function(ui)
     ui.label("Detected: " .. tostring(#soundPaths) .. " compiled sounds", ui.T.text)
-    ui.label("Folder: csgo\\sounds (.vsnd_c)", ui.T.textdim)
+    if #soundPaths == 0 then
+        local shortReason = tostring(soundScanReason or "no .vsnd_c files")
+        if shortReason:find("FFI", 1, true) then
+            shortReason = "Enable Allow insecure FFI and rerun"
+        elseif shortReason:find("folder", 1, true) then
+            shortReason = "Folder not found: game\\csgo\\sounds"
+        else
+            shortReason = "Expected compiled .vsnd_c files"
+        end
+        ui.label(shortReason, ui.T.textdim)
+    else
+        ui.label("Folder: game\\csgo\\sounds (.vsnd_c)", ui.T.textdim)
+    end
 end)
 
 local function entityIndex(entity)
@@ -11256,6 +11574,16 @@ local nextProbe, probeAttempts = 0, 0
 local PROBE_MAX_ATTEMPTS = 12
 local PROBE_RETRY_SECONDS = 6.0
 
+local function inLiveServer()
+    local server = ""
+    pcall(function()
+        if engine and type(engine.GetServerIP) == "function" then
+            server = tostring(engine.GetServerIP() or "")
+        end
+    end)
+    return server ~= "" and not server:lower():find("loopback", 1, true)
+end
+
 local selectedCodes, bestSelectedCode, selectionSignature, restoreSelectedCodes
 
 selectedCodes = function()
@@ -11298,11 +11626,16 @@ restoreSelectedCodes = function(codes)
     regionCombo:Set(selected)
 end
 
--- Steam publishes this interface specifically for estimating relay latency.
--- It is a read-only V4 call: no signatures, RVA offsets, memory patches, or
--- per-frame native calls are used here.  A failed probe simply leaves the
--- normal official list intact.
-local relayProbe = { tried = false, ready = false, detail = "Relay probe pending" }
+-- Do not call SteamNetworkingUtils through LuaJIT FFI here.  Even though the
+-- public V4 layout is documented, the interface owned by CS2 can be replaced
+-- while a connection is being created.  A stale cdata/vtable call then escapes
+-- Lua's pcall and crashes the process.  Region forcing itself only needs the
+-- regular CS2 console command below, so keep the native probe disabled.
+local relayProbe = {
+    tried = true,
+    ready = false,
+    detail = "Native relay ping probe disabled for stability",
+}
 
 local function decodePop(id)
     local text = ""
@@ -11314,96 +11647,12 @@ local function decodePop(id)
 end
 
 local function openRelayProbe()
-    if relayProbe.tried then return relayProbe.ready end
-    relayProbe.tried = true
-    if type(ffi) ~= "table" then
-        relayProbe.detail = "Aimware FFI is unavailable"
-        return false
-    end
-
-    local ok, reason = pcall(function()
-        local module = ffi.C.GetModuleHandleA("steamnetworkingsockets.dll")
-        if module == nil then error("steamnetworkingsockets.dll is not loaded") end
-        local accessor = ffi.C.GetProcAddress(module, "SteamNetworkingUtils_LibV4")
-        if accessor == nil then error("SteamNetworkingUtils V4 is unavailable") end
-
-        local utils = ffi.cast("void*(*)(void)", accessor)()
-        if utils == nil then error("SteamNetworkingUtils returned no interface") end
-        local vtable = ffi.cast("void***", utils)[0]
-        if vtable == nil then error("SteamNetworkingUtils returned no vtable") end
-
-        -- ISteamNetworkingUtils V4 public methods: CheckPingDataUpToDate=7,
-        -- GetPingToDataCenter=8, GetPOPCount=10 and GetPOPList=11.
-        relayProbe.utils = utils
-        relayProbe.checkFresh = ffi.cast("bool(*)(void*, float)", vtable[7])
-        relayProbe.getPing = ffi.cast("int(*)(void*, uint32_t, uint32_t*)", vtable[8])
-        relayProbe.getDirectPing = ffi.cast("int(*)(void*, uint32_t)", vtable[9])
-        relayProbe.getCount = ffi.cast("int(*)(void*)", vtable[10])
-        relayProbe.getList = ffi.cast("int(*)(void*, uint32_t*, int)", vtable[11])
-    end)
-    relayProbe.ready = ok and relayProbe.utils ~= nil and relayProbe.getPing ~= nil
-        and relayProbe.getDirectPing ~= nil and relayProbe.getCount ~= nil and relayProbe.getList ~= nil
-    relayProbe.detail = relayProbe.ready and "Steam relay latency API ready" or ("Relay API unavailable: " .. tostring(reason))
-    return relayProbe.ready
+    return false
 end
 
 local function refreshRelayPings(keepCodes)
-    if not openRelayProbe() then return 0 end
-    -- This runs only after a user refresh or during the bounded startup pass.
-    -- Asking for fresh data here starts Steam's measurement if it has not
-    -- already started; it does not patch or alter matchmaking state.
-    pcall(function() relayProbe.checkFresh(relayProbe.utils, 0.0) end)
-
-    local okCount, count = pcall(function() return tonumber(relayProbe.getCount(relayProbe.utils)) or 0 end)
-    if not okCount or count <= 0 then
-        relayProbe.detail = "Steam relay list is still initializing"
-        return 0
-    end
-    count = math.min(count, 256)
-    local ids = ffi.new("uint32_t[?]", count)
-    local okList, filled = pcall(function() return tonumber(relayProbe.getList(relayProbe.utils, ids, count)) or 0 end)
-    if not okList or filled <= 0 then
-        relayProbe.detail = "Steam returned no relay list yet"
-        return 0
-    end
-
-    local measured, directCount, relayedCount = {}, 0, 0
-    for i = 0, math.min(filled, count) - 1 do
-        local id, code = tonumber(ids[i]), decodePop(ids[i])
-        if code ~= "" then
-            local ping
-            local okDirect, direct = pcall(function() return tonumber(relayProbe.getDirectPing(relayProbe.utils, id)) end)
-            if okDirect and type(direct) == "number" and direct >= 0 and direct <= 2000 then
-                ping, directCount = direct, directCount + 1
-            else
-                local via = ffi.new("uint32_t[1]")
-                local okPing, relayed = pcall(function() return tonumber(relayProbe.getPing(relayProbe.utils, id, via)) end)
-                if okPing and type(relayed) == "number" and relayed >= 0 and relayed <= 2000 then
-                    ping, relayedCount = relayed, relayedCount + 1
-                end
-            end
-            if ping then
-                measured[code] = math.floor(ping + 0.5)
-            end
-        end
-    end
-    if next(measured) == nil then
-        relayProbe.detail = "Steam is measuring relay latency (" .. tostring(count) .. " relays found, no samples yet)"
-        return 0
-    end
-
-    local measuredCount = 0
-    for _ in pairs(measured) do measuredCount = measuredCount + 1 end
-    regionPings = measured
-    local keep = keepCodes or selectedCodes()
-    replaceRegions(regionCatalog, "")
-    regionWidget.options = regionNames
-    regionWidget.optionColors = regionColors
-    regionWidget.optionSuffixes = regionSuffixes
-    restoreSelectedCodes(keep)
-    relayProbe.detail = "Measured " .. tostring(measuredCount) .. " Steam relays (direct "
-        .. tostring(directCount) .. ", relayed " .. tostring(relayedCount) .. ")"
-    return measuredCount
+    relayProbe.detail = "Native relay ping probe disabled for stability"
+    return 0
 end
 
 local function settingsSignature()
@@ -11453,6 +11702,11 @@ end
 local function applySelection(showNotice)
     local code, selectedCount = bestSelectedCode()
     regionForceEnabled = code ~= ""
+    if inLiveServer() then
+        statusText = "Relay change queued until the main menu"
+        if showNotice then M:Notify(statusText, "info") end
+        return false
+    end
     local ping = math.max(25, math.min(350, math.floor(tonumber(maxPing:Get()) or 80)))
     local pingOK = pcall(function() client.SetConVar("mm_dedicated_search_maxping", ping, true) end)
     local relayOK
@@ -11515,9 +11769,7 @@ local function refreshOfficialRegions(showNotice)
         regionWidget.optionColors = regionColors
         regionWidget.optionSuffixes = regionSuffixes
         restoreSelectedCodes(keep)
-        -- Steam takes a few seconds to create fresh ping measurements.  Retry
-        -- only a handful of times, never on every frame.
-        nextProbe, probeAttempts = (globals.RealTime() or 0) + 1.0, 0
+        nextProbe, probeAttempts = 0, 0
     end
 
     if measured > 0 and nearestCode ~= "" then
@@ -11531,7 +11783,7 @@ local function refreshOfficialRegions(showNotice)
     return loadedOfficial or measured > 0
 end
 
-actionSection:Button("Reload relay pings", function()
+actionSection:Button("Reload relay list", function()
     refreshOfficialRegions(true)
     saveSettings()
 end)
@@ -11564,38 +11816,17 @@ callbacks.Register("Draw", "rgnMultitool_RegionDraw", function()
     nextPoll = t + 0.25
     local signature = settingsSignature()
     if signature ~= lastSavedSignature then saveSettings() end
-    if regionForceEnabled then
+    if inLiveServer() then
+        return
+    elseif regionForceEnabled then
         if signature ~= lastAppliedSignature then applySelection(false) end
     elseif applied then
         restoreAutomatic(false)
     end
 
-    -- One bounded initialization pass obtains the local Steam relay pings
-    -- without leaving an expensive polling loop running during a match.
-    if nextProbe > 0 and t >= nextProbe and probeAttempts < PROBE_MAX_ATTEMPTS then
-        probeAttempts = probeAttempts + 1
-        local keep = selectedCodes()
-        local measured = refreshRelayPings(keep)
-        if measured > 0 then
-            nextProbe = 0
-            statusText = "Nearest: " .. nearestName .. " (" .. tostring(nearestPing) .. " ms)"
-        else
-            nextProbe = t + 2.0
-        end
-    elseif nextProbe > 0 and probeAttempts >= PROBE_MAX_ATTEMPTS then
-        -- The relay subsystem may only become ready after CS2 has completed
-        -- its own connection work.  Keep trying at a very low frequency so
-        -- the user never needs to press Refresh, while avoiding render-rate
-        -- polling or any meaningful FPS cost.
-        nextProbe = t + PROBE_RETRY_SECONDS
-        probeAttempts = 0
-        relayProbe.detail = "Waiting for Steam relay samples; retrying automatically"
-    end
 end)
 
--- Begin one low-frequency local probe on load.  The static catalogue remains
--- usable while Steam finishes its asynchronous latency measurement.
-nextProbe = (globals.RealTime() or 0) + 0.5
+nextProbe = 0
 
 callbacks.Register("Unload", "rgnMultitool_RegionUnload", function()
     saveSettings()

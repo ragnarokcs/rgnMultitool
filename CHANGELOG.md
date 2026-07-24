@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.4.2 - 2026-07-23
+
+### Stability and portable asset discovery
+
+- Removed the native Steam relay-interface probe that could retain a stale game-owned pointer during server connection and crash CS2 outside Lua's protected calls.
+- Region preferences now use only regular CS2 console settings, are applied from the main menu and are queued while connected to a live server.
+- Replaced ANSI-only custom-character and custom-sound discovery with bounded Unicode Windows directory access, supporting Steam libraries on other drives and paths containing non-English characters.
+- Added precise empty-catalogue diagnostics for disabled insecure FFI, missing/unreadable asset folders and folders without compiled `.vmdl_c` or `.vsnd_c` files.
+- Kept asset scans restricted to `game/csgo/characters` and `game/csgo/sounds`; no general PC scan or automatic download was added.
+
 ## 1.4.1 - 2026-07-22
 
 ### Whitelist and local control reliability

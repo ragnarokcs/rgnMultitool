@@ -87,7 +87,7 @@ Click any preview to open the full-size image.
 - Knife models and finishes with automatic reapplication after spawn, death, team changes and map changes.
 - Glove models and finishes with guarded refresh timing to prevent flicker and repeated writes.
 - Official agents with saved selection.
-- Custom character models discovered from the local `csgo/characters` directory.
+- Custom character models discovered from the local `game/csgo/characters` directory, including Steam libraries whose paths contain non-English characters.
 - Automatic cosmetic persistence plus five named weapon, knife and glove profiles.
 
 ### Viewmodel and movement
@@ -102,8 +102,8 @@ Click any preview to open the full-size image.
 ### Manual AA, region and whitelist
 
 - Manual AA directions are available through Aimware's native **Ragebot > Anti-Aim** controls, with optional compact on-screen direction indicators.
-- The **Region** module reads CS2's public Steam relay latency data, orders recognized relays from lowest to highest measured latency and uses a green-to-yellow-to-red latency range.
-- Select one or more relays and apply the preference; when multiple relays are selected, the lowest measured latency is used for the official relay preference.
+- The **Region** module provides a curated list of CS2 Steam relay preferences and a maximum-matchmaking-ping control without calling game-owned native relay interfaces.
+- Select one or more relays and apply the preference from the main menu. Changes requested during a live server are queued until the next safe menu state.
 - The **Whitelist** module refreshes the active enemy roster on joins, spawns and team changes. Enemies begin as valid targets; selected players can be protected locally from targeting, with the target state applied immediately after every UI change.
 - The optional **Kill Timer** tracks local round kills, shows a compact animated delay HUD and supports a configurable limit of up to five opponents.
 
@@ -126,6 +126,7 @@ Click any preview to open the full-size image.
 - Strict local-attacker resolution prevents hits and kills by teammates or opponents from playing sounds, including in Deathmatch.
 - Local respawns, team changes and controlled bots are resolved through the current pawn/controller identity cache.
 - Place compiled `.vsnd_c` files in `Counter-Strike Global Offensive/game/csgo/sounds` or its subfolders, then press **Refresh csgo/sounds**.
+- Unicode-aware discovery supports Steam libraries on other drives and paths containing non-English characters. An empty list reports whether insecure FFI is disabled, the folder is missing or no compiled files were found.
 - Sound scanning occurs only at Lua startup or on manual refresh; both effects are disabled by default.
 - The Lua never downloads or installs asset packs automatically. See [Manual asset packages](PACKAGES.md) for the optional sound and custom-character downloads.
 
@@ -144,7 +145,7 @@ Click any preview to open the full-size image.
 - Vote logic preserves its 20 Hz service cadence while avoiding protected-call overhead on intermediate `CreateMove` commands.
 - Runtime overlay dispatch is allocated once at startup instead of creating a temporary closure every rendered frame.
 - Automatic session rearming when joining another server or changing maps.
-- Region probing is bounded and low-frequency; latency refreshes happen at load, on explicit reload and while Steam is still preparing relay samples, never every frame.
+- Region forcing uses only regular CS2 console settings, never a LuaJIT call through a game-owned SteamNetworkingSockets interface, and never mutates the preference while connected to a live server.
 - Local configuration files only; no user-specific Windows paths are embedded.
 - Built-in update check with source-size, signature, version and Lua syntax validation.
 
