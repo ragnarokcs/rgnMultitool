@@ -83,15 +83,19 @@ Repeat the second command for every numbered character part. A mismatched hash m
 
 ### The sound list is empty
 
+- Enable **Allow insecure FFI** and **Allow game scripting** in Aimware, then run the Lua again.
 - Verify the extension is `.vsnd_c`, not `.wav`, `.mp3` or `.vsnd`.
 - Verify the files are inside `game\csgo\sounds` or one of its subfolders.
 - Press **Refresh csgo/sounds** after copying the files.
+- Press Refresh once and check the Aimware console: version 1.4.2 reports the resolved folder and the exact failure reason.
 
 ### No custom characters are listed
 
+- Enable **Allow insecure FFI** and **Allow game scripting** in Aimware.
 - Verify the final path starts with `game\csgo\characters\models`.
 - Restart CS2 after installing the package.
 - Run the Lua only after the files have finished extracting.
+- Use **Portable status / requirements** in the Custom Skins module to print the resolved folder and scan result.
 
 ### CS2 reports a missing or error material
 
