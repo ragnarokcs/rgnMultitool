@@ -87,7 +87,7 @@ Repeat the second command for every numbered character part. A mismatched hash m
 - Verify the extension is `.vsnd_c`, not `.wav`, `.mp3` or `.vsnd`.
 - Verify the files are inside `game\csgo\sounds` or one of its subfolders.
 - Press **Refresh csgo/sounds** after copying the files.
-- Press Refresh once and check the Aimware console: version 1.4.2 reports the resolved folder and the exact failure reason.
+- Press Refresh once and check the Aimware console: version 1.4.3 reports the resolved folder and the exact failure reason.
 
 ### No custom characters are listed
 
@@ -96,6 +96,7 @@ Repeat the second command for every numbered character part. A mismatched hash m
 - Restart CS2 after installing the package.
 - Run the Lua only after the files have finished extracting.
 - Use **Portable status / requirements** in the Custom Skins module to print the resolved folder and scan result.
+- Resolution is unrelated to asset discovery; 1920x1080 and other display modes use the same `game/csgo/characters` folder.
 
 ### CS2 reports a missing or error material
 
