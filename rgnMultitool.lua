@@ -1,5 +1,5 @@
--- rgnMultitool 1.4.3
-local RGN_MULTITOOL_VERSION = "1.4.3"
+-- rgnMultitool 1.4.4
+local RGN_MULTITOOL_VERSION = "1.4.4"
 local RGN_MULTITOOL_SIGNATURE = "RGN_MULTITOOL_SOURCE_V1"
 _G.RGN_MULTITOOL_VERSION = RGN_MULTITOOL_VERSION
 
@@ -3640,21 +3640,22 @@ local M = M
 
 local ffi = rawget(_G, "ffi")
 local CONFIG_FILE = "rgnmultitool_viewmodel.txt"
+local NATIVE_FOV_KEY = "world.fov"
 local DEFAULT = {
     enabled = false, knifeLeft = false,
-    aspectEnabled = false, aspect = 1.78,
+    fovEnabled = false, fov = 90,
     x = 1.0, y = 1.0, z = -1.0,
 }
 local original = {
     x = DEFAULT.x, y = DEFAULT.y, z = DEFAULT.z,
-    preset = 1, aspect = 0,
+    preset = 1, fov = DEFAULT.fov,
 }
 local status = "ready"
 local lastApply, lastSignature, lastSave = -100, "", -100
 local lastEnabled, lastExtended = false, false
-local aspectStatus = "automatic"
-local aspectApplied = false
-local lastAspectEnabled, lastAspectValue, lastAspectApply = false, nil, -100
+local fovStatus = "native Aimware setting"
+local fovApplied = false
+local lastFovEnabled, lastFovValue, lastFovApply = false, nil, -100
 local knifeLeftOwned, knifeHandWasAlive = false, false
 local knifeHandStatus = "disabled"
 
@@ -3738,6 +3739,24 @@ local function setConVar(name, value)
     matches = verified()
     if matches ~= nil then return matches end
     return apiOk or commandOk
+end
+
+local function readGuiNumber(key, fallback)
+    local value
+    pcall(function()
+        if gui and type(gui.GetValue) == "function" then value = gui.GetValue(key) end
+    end)
+    return tonumber(value) or fallback
+end
+
+local function setGuiNumber(key, value)
+    if not gui or type(gui.SetValue) ~= "function" then return false, nil end
+    local ok = pcall(function() gui.SetValue(key, tonumber(value)) end)
+    if not ok then return false, nil end
+    local readback = readGuiNumber(key, nil)
+    local verified = type(readback) == "number"
+        and math.abs(readback - tonumber(value)) <= 0.51
+    return verified, readback
 end
 
 local function pointer(value)
@@ -3935,19 +3954,57 @@ original.x = readConVar("viewmodel_offset_x", DEFAULT.x)
 original.y = readConVar("viewmodel_offset_y", DEFAULT.y)
 original.z = readConVar("viewmodel_offset_z", DEFAULT.z)
 original.preset = readConVar("viewmodel_presetpos", 1)
-original.aspect = readConVar("r_aspectratio", 0)
+original.fov = clamp(readGuiNumber(NATIVE_FOV_KEY, DEFAULT.fov), 60, 120)
+
+local function legacyAspectToNativeFov(legacyAspect, baseFov)
+    legacyAspect = tonumber(legacyAspect)
+    baseFov = tonumber(baseFov)
+    if not legacyAspect or not baseFov or legacyAspect <= 0 then return nil end
+
+    local width, height = 1920, 1080
+    pcall(function()
+        if draw and type(draw.GetScreenSize) == "function" then
+            local w, h = draw.GetScreenSize()
+            if tonumber(w) and tonumber(h) and tonumber(h) > 0 then
+                width, height = tonumber(w), tonumber(h)
+            end
+        end
+    end)
+
+    local screenAspect = width / height
+    if screenAspect <= 0 then return nil end
+    local halfRadians = math.rad(clamp(baseFov, 1, 179)) * 0.5
+    local converted = math.deg(2 * math.atan(
+        math.tan(halfRadians) * (legacyAspect / screenAspect)
+    ))
+    return clamp(converted, 60, 120)
+end
 
 local config = loadConfig()
+local configuredFov = tonumber(config.view_fov)
+-- Migrate old configurations without treating the former aspect-ratio value
+-- (for example 3.00) as a FOV angle. Convert its horizontal projection to
+-- the closest synchronized Aimware FOV for the current screen resolution.
+if not configuredFov or configuredFov < 40 then
+    configuredFov = legacyAspectToNativeFov(config.aspect, original.fov) or original.fov
+end
+local configuredFovEnabled = config.view_fov_enabled
+if configuredFovEnabled == nil then configuredFovEnabled = config.aspect_enabled end
+if config.view_fov_enabled == nil and config.aspect_enabled == "1" then
+    -- Clear the legacy projection override immediately. It can survive a Lua
+    -- reload inside the same game session and would keep native ESP displaced.
+    pcall(setConVar, "r_aspectratio", 0)
+end
 local tab = M:Tab("VIEWMODEL")
 tab:Row()
 local control = tab:Section("Viewmodel override")
 local enabled = control:Checkbox("Enable viewmodel override", config.enabled == "1")
 local extended = control:Checkbox("Extended XYZ (validated hook)", false)
 local knifeLeft = control:Checkbox("Knife in left hand", config.knife_left == "1")
-local aspectEnabled = control:Checkbox("Override FOV", config.aspect_enabled == "1")
-local aspectRatio = control:Slider(
-    "View FOV", clamp(config.aspect or DEFAULT.aspect, 0.50, 3.00),
-    0.50, 3.00, 0.01, "%.2f"
+local fovEnabled = control:Checkbox("Override FOV", configuredFovEnabled == "1")
+local viewFov = control:Slider(
+    "View FOV", clamp(configuredFov, 60, 120),
+    60, 120, 1, "%.0f"
 )
 local offsetX = control:Slider("Horizontal position (X)", clamp(config.x or DEFAULT.x, -30, 30), -30, 30, 0.1, "%.1f")
 local offsetY = control:Slider("Depth position (Y)", clamp(config.y or DEFAULT.y, -30, 30), -30, 30, 0.1, "%.1f")
@@ -3967,7 +4024,7 @@ local function signature()
     local x, y, z = values()
     return table.concat({
         enabled:Get() and "1" or "0", extended:Get() and "1" or "0", knifeLeft:Get() and "1" or "0",
-        aspectEnabled:Get() and "1" or "0", string.format("%.2f", clamp(aspectRatio:Get(), 0.50, 3.00)),
+        fovEnabled:Get() and "1" or "0", string.format("%.0f", clamp(viewFov:Get(), 60, 120)),
         x, y, z,
     }, ":")
 end
@@ -3977,8 +4034,8 @@ local function saveConfig()
     local data = table.concat({
         "enabled=" .. (enabled:Get() and "1" or "0"),
         "knife_left=" .. (knifeLeft:Get() and "1" or "0"),
-        "aspect_enabled=" .. (aspectEnabled:Get() and "1" or "0"),
-        "aspect=" .. string.format("%.2f", clamp(aspectRatio:Get(), 0.50, 3.00)),
+        "view_fov_enabled=" .. (fovEnabled:Get() and "1" or "0"),
+        "view_fov=" .. string.format("%.0f", clamp(viewFov:Get(), 60, 120)),
         "x=" .. tostring(x), "y=" .. tostring(y), "z=" .. tostring(z),
     }, "\n")
     local ok = false
@@ -3989,31 +4046,43 @@ local function saveConfig()
     return ok
 end
 
-local function applyAspect(force)
-    if not aspectEnabled:Get() then return false end
+local function applyFov(force)
+    if not fovEnabled:Get() then return false end
     local now = clock()
-    local value = clamp(aspectRatio:Get(), 0.50, 3.00)
-    if not force and lastAspectValue == value and now - lastAspectApply < 2.50 then
+    local value = clamp(viewFov:Get(), 60, 120)
+    -- world.fov is an Aimware-owned persistent value. Verify it only at a low
+    -- frequency so configuration reloads stay synchronized without rewriting
+    -- the setting every frame.
+    if not force and lastFovValue == value then
+        if now - lastFovApply < 2.50 then return true end
+        local current = readGuiNumber(NATIVE_FOV_KEY, nil)
+        lastFovApply = now
+        if type(current) == "number" and math.abs(current - value) <= 0.51 then
+            return true
+        end
+    end
+    local verified, readback = setGuiNumber(NATIVE_FOV_KEY, value)
+    lastFovApply = now
+    if verified then
+        lastFovValue = value
+        fovApplied = true
+        fovStatus = string.format("%.0f (Aimware synchronized)", readback)
         return true
     end
-    local ok = setConVar("r_aspectratio", value)
-    local readback = readConVar("r_aspectratio", nil)
-    local verified = ok and type(readback) == "number" and math.abs(readback - value) <= 0.02
-    lastAspectApply, lastAspectValue = now, value
-    aspectApplied = verified == true
-    aspectStatus = verified
-        and string.format("%.2f (engine %.2f)", value, readback)
-        or "FOV command refused"
-    return verified
+
+    lastFovValue = nil
+    fovApplied = false
+    fovStatus = "native Aimware View FOV unavailable"
+    return false
 end
 
-local function restoreAspect()
-    local value = tonumber(original.aspect) or 0
-    local ok = setConVar("r_aspectratio", value)
-    aspectApplied = false
-    lastAspectValue, lastAspectApply = nil, -100
-    aspectStatus = ok and (value == 0 and "automatic" or string.format("restored %.2f", value))
-        or "FOV restore failed"
+local function restoreFov()
+    local value = clamp(original.fov, 60, 120)
+    local ok, readback = setGuiNumber(NATIVE_FOV_KEY, value)
+    fovApplied = false
+    lastFovValue, lastFovApply = nil, -100
+    fovStatus = ok and string.format("restored %.0f", readback or value)
+        or "native FOV restore failed"
     return ok
 end
 
@@ -4083,20 +4152,20 @@ presets:Button("Extreme", function() usePreset(8.0, 8.0, -5.0, "extreme", true) 
 actions:Button("Apply now", function()
     enabled:Set(true)
     local ok = apply(true)
-    if aspectEnabled:Get() then ok = applyAspect(true) and ok end
+    if fovEnabled:Get() then ok = applyFov(true) and ok end
     saveConfig()
     M:Notify(ok and status or "viewmodel could not be applied", ok and "success" or "error")
 end)
 actions:Button("Restore original", function()
     enabled:Set(false)
-    aspectEnabled:Set(false)
+    fovEnabled:Set(false)
     local ok = restore()
-    ok = restoreAspect() and ok
+    ok = restoreFov() and ok
     saveConfig()
     M:Notify(status, ok and "success" or "error")
 end)
 actions:Button("Show current values", function()
-    M:Notify(status .. " | FOV: " .. aspectStatus .. " | knife hand: " .. knifeHandStatus, "info")
+    M:Notify(status .. " | FOV: " .. fovStatus .. " | knife hand: " .. knifeHandStatus, "info")
 end)
 
 local function commandHand(left)
@@ -4172,12 +4241,12 @@ M._viewmodelCommandCallback = function()
 end
 
 lastEnabled, lastExtended = enabled:Get(), extended:Get()
-lastAspectEnabled = aspectEnabled:Get()
+lastFovEnabled = fovEnabled:Get()
 M:OnFrame(function()
     local now = clock()
     local on = enabled:Get()
     local ext = extended:Get()
-    local aspectOn = aspectEnabled:Get()
+    local fovOn = fovEnabled:Get()
     if on then
         pcall(apply, false)
     elseif lastEnabled then
@@ -4185,13 +4254,13 @@ M:OnFrame(function()
     elseif EXT.installed then
         pcall(EXT.uninstall)
     end
-    if aspectOn then
-        pcall(applyAspect, false)
-    elseif lastAspectEnabled or aspectApplied then
-        pcall(restoreAspect)
+    if fovOn then
+        pcall(applyFov, false)
+    elseif lastFovEnabled or fovApplied then
+        pcall(restoreFov)
     end
     lastEnabled, lastExtended = on, ext
-    lastAspectEnabled = aspectOn
+    lastFovEnabled = fovOn
     local sig = signature()
     if (sig ~= lastSignature or now - lastSave >= 2.50) and now - lastSave >= 0.50 then
         lastSave = now
@@ -4205,7 +4274,7 @@ pcall(function()
         if knifeLeftOwned then pcall(commandHand, false) end
         M._viewmodelCommandCallback = nil
         M._viewmodelCommandActive = nil
-        if aspectApplied or aspectEnabled:Get() then pcall(restoreAspect) end
+        if fovApplied or fovEnabled:Get() then pcall(restoreFov) end
         if enabled:Get() then pcall(restore) end
         pcall(EXT.uninstall)
         pcall(callbacks.Unregister, "Unload", "rgnMultitool_ViewmodelUnload")

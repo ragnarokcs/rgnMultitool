@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.4.4 - 2026-07-27
+
+### Synchronized FOV hotfix
+
+- Replaced the engine-only `r_aspectratio` projection override with Aimware's native `world.fov` setting so player ESP remains aligned with game geometry.
+- Limited the View FOV control to Aimware's verified 60–120 range and removed the unused continuation beyond 120.
+- Migrates the previous aspect-ratio setting to the closest equivalent native FOV for the current resolution, then clears the stale engine-only override.
+- Keeps FOV persistence independent from viewmodel X/Y/Z and restores the original Aimware value when the option is disabled or the Lua unloads.
+
 ## 1.4.3 - 2026-07-27
 
 ### Cross-PC compatibility and runtime verification
