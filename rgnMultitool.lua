@@ -1,5 +1,5 @@
--- rgnMultitool 1.4.2
-local RGN_MULTITOOL_VERSION = "1.4.2"
+-- rgnMultitool 1.4.3
+local RGN_MULTITOOL_VERSION = "1.4.3"
 local RGN_MULTITOOL_SIGNATURE = "RGN_MULTITOOL_SOURCE_V1"
 _G.RGN_MULTITOOL_VERSION = RGN_MULTITOOL_VERSION
 
@@ -2308,6 +2308,23 @@ function M:Build(opts)
                 end
             end
         end
+        -- Keep the always-on vote service on the same CreateMove bridge used
+        -- by the other runtime modules. Some Aimware builds accept a separate
+        -- named CreateMove callback but stop dispatching it after reconnects,
+        -- leaving correctly detected votes stuck in the local-chat queue.
+        if type(M._voteLogicCallback) == "function" then
+            local ok, err = pcall(M._voteLogicCallback)
+            M._voteLogicAliveAt = now()
+            if ok then
+                M._voteLogicError = nil
+            else
+                local message = tostring(err)
+                if M._voteLogicError ~= message then
+                    M._voteLogicError = message
+                    print("[rgnVotes] main CreateMove hook error: " .. message)
+                end
+            end
+        end
         if not (M._open and M._focus) or not cmd then return end
         pcall(function() cmd.forwardmove = 0 end)
         pcall(function() cmd.sidemove = 0 end)
@@ -2451,6 +2468,10 @@ do
                 "GetModuleFileNameW",
                 "uint32_t(*)(void*, uint16_t*, uint32_t)"
             )
+            local getModuleHandleW = proc(
+                "GetModuleHandleW",
+                "void*(*)(const uint16_t*)"
+            )
             local findFirstW = proc(
                 "FindFirstFileW",
                 "void*(*)(const uint16_t*, void*)"
@@ -2511,6 +2532,16 @@ do
                 local normalized = path:gsub("/", "\\"):gsub("\\+$", "")
                 local lower = normalized:lower()
                 if lower:sub(-5) == "\\csgo" then return normalized end
+
+                -- GetCurrentDirectoryW may point at game\csgo\bin\win64 on
+                -- some installations. The older generic bin marker appended
+                -- a second "\csgo" in that case and produced an empty asset
+                -- catalogue. Resolve any path already below csgo first.
+                local csgoChild = lower:find("\\csgo\\", 1, true)
+                if csgoChild then
+                    return normalized:sub(1, csgoChild + 4)
+                end
+
                 local executableSuffix = "\\bin\\win64\\cs2.exe"
                 if lower:sub(-#executableSuffix) == executableSuffix then
                     return normalized:sub(1, #normalized - #executableSuffix) .. "\\csgo"
@@ -2529,6 +2560,19 @@ do
                     cachedRoot = deriveCsgoRoot(wideToUtf8(buffer, count))
                     if cachedRoot then return cachedRoot end
                 end
+
+                -- A module path is a stable fallback when the process current
+                -- directory was changed by Steam, an overlay or another Lua.
+                local clientName = utf8ToWide("client.dll")
+                local clientModule = clientName and getModuleHandleW(clientName) or nil
+                if clientModule ~= nil then
+                    count = getModuleFileNameW(clientModule, buffer, 32768)
+                    if count and count > 0 and count < 32768 then
+                        cachedRoot = deriveCsgoRoot(wideToUtf8(buffer, count))
+                        if cachedRoot then return cachedRoot end
+                    end
+                end
+
                 count = getCurrentDirectoryW(32768, buffer)
                 if count and count > 0 and count < 32768 then
                     cachedRoot = deriveCsgoRoot(wideToUtf8(buffer, count))
@@ -3592,16 +3636,25 @@ end)
 
 loadModule("VIEWMODEL", function()
 local M = M
-local M = M
--- Lightweight XYZ-only viewmodel positioning for this CS2 build.
+-- Lightweight verified viewmodel positioning for this CS2 build.
 
 local ffi = rawget(_G, "ffi")
 local CONFIG_FILE = "rgnmultitool_viewmodel.txt"
-local DEFAULT = { enabled = false, knifeLeft = false, x = 1.0, y = 1.0, z = -1.0 }
-local original = { x = DEFAULT.x, y = DEFAULT.y, z = DEFAULT.z, preset = 1 }
+local DEFAULT = {
+    enabled = false, knifeLeft = false,
+    aspectEnabled = false, aspect = 1.78,
+    x = 1.0, y = 1.0, z = -1.0,
+}
+local original = {
+    x = DEFAULT.x, y = DEFAULT.y, z = DEFAULT.z,
+    preset = 1, aspect = 0,
+}
 local status = "ready"
 local lastApply, lastSignature, lastSave = -100, "", -100
 local lastEnabled, lastExtended = false, false
+local aspectStatus = "automatic"
+local aspectApplied = false
+local lastAspectEnabled, lastAspectValue, lastAspectApply = false, nil, -100
 local knifeLeftOwned, knifeHandWasAlive = false, false
 local knifeHandStatus = "disabled"
 
@@ -3653,14 +3706,37 @@ end
 
 local function setConVar(name, value)
     local text = type(value) == "number" and string.format("%.3f", value) or tostring(value)
-    local apiOk, commandOk = false, false
-    pcall(function()
-        if client and type(client.SetConVar) == "function" then
-            local result = client.SetConVar(name, text, true)
-            apiOk = result ~= false
+    local expected = tonumber(value)
+    local canVerify = client and type(client.GetConVar) == "function" and expected ~= nil
+    local function verified()
+        if not canVerify then return nil end
+        local current
+        pcall(function() current = tonumber(client.GetConVar(name)) end)
+        return type(current) == "number" and math.abs(current - expected) <= 0.011
+    end
+
+    local apiOk = false
+    local hasSetter = client and type(client.SetConVar) == "function"
+    local callOk, result = pcall(function()
+        if hasSetter then
+            return client.SetConVar(name, text, true)
         end
     end)
-    commandOk = pcall(function() client.Command(name .. " " .. text, true) end)
+    apiOk = hasSetter and callOk and result ~= false
+    local matches = verified()
+    if matches == true or (matches == nil and apiOk) then return true end
+
+    -- Some Aimware builds expose SetConVar but leave protected viewmodel
+    -- variables unchanged. Use the documented unrestricted console path only
+    -- when the direct setter did not verify, avoiding duplicate commands.
+    local commandOk = pcall(function()
+        if not client or type(client.Command) ~= "function" then
+            error("client.Command unavailable")
+        end
+        client.Command(name .. " " .. text, true)
+    end)
+    matches = verified()
+    if matches ~= nil then return matches end
     return apiOk or commandOk
 end
 
@@ -3859,6 +3935,7 @@ original.x = readConVar("viewmodel_offset_x", DEFAULT.x)
 original.y = readConVar("viewmodel_offset_y", DEFAULT.y)
 original.z = readConVar("viewmodel_offset_z", DEFAULT.z)
 original.preset = readConVar("viewmodel_presetpos", 1)
+original.aspect = readConVar("r_aspectratio", 0)
 
 local config = loadConfig()
 local tab = M:Tab("VIEWMODEL")
@@ -3867,6 +3944,11 @@ local control = tab:Section("Viewmodel override")
 local enabled = control:Checkbox("Enable viewmodel override", config.enabled == "1")
 local extended = control:Checkbox("Extended XYZ (validated hook)", false)
 local knifeLeft = control:Checkbox("Knife in left hand", config.knife_left == "1")
+local aspectEnabled = control:Checkbox("Override FOV", config.aspect_enabled == "1")
+local aspectRatio = control:Slider(
+    "View FOV", clamp(config.aspect or DEFAULT.aspect, 0.50, 3.00),
+    0.50, 3.00, 0.01, "%.2f"
+)
 local offsetX = control:Slider("Horizontal position (X)", clamp(config.x or DEFAULT.x, -30, 30), -30, 30, 0.1, "%.1f")
 local offsetY = control:Slider("Depth position (Y)", clamp(config.y or DEFAULT.y, -30, 30), -30, 30, 0.1, "%.1f")
 local offsetZ = control:Slider("Vertical position (Z)", clamp(config.z or DEFAULT.z, -30, 30), -30, 30, 0.1, "%.1f")
@@ -3885,6 +3967,7 @@ local function signature()
     local x, y, z = values()
     return table.concat({
         enabled:Get() and "1" or "0", extended:Get() and "1" or "0", knifeLeft:Get() and "1" or "0",
+        aspectEnabled:Get() and "1" or "0", string.format("%.2f", clamp(aspectRatio:Get(), 0.50, 3.00)),
         x, y, z,
     }, ":")
 end
@@ -3894,6 +3977,8 @@ local function saveConfig()
     local data = table.concat({
         "enabled=" .. (enabled:Get() and "1" or "0"),
         "knife_left=" .. (knifeLeft:Get() and "1" or "0"),
+        "aspect_enabled=" .. (aspectEnabled:Get() and "1" or "0"),
+        "aspect=" .. string.format("%.2f", clamp(aspectRatio:Get(), 0.50, 3.00)),
         "x=" .. tostring(x), "y=" .. tostring(y), "z=" .. tostring(z),
     }, "\n")
     local ok = false
@@ -3901,6 +3986,34 @@ local function saveConfig()
         local handle = file.Open(CONFIG_FILE, "w")
         if handle then handle:Write(data); handle:Close(); ok = true end
     end)
+    return ok
+end
+
+local function applyAspect(force)
+    if not aspectEnabled:Get() then return false end
+    local now = clock()
+    local value = clamp(aspectRatio:Get(), 0.50, 3.00)
+    if not force and lastAspectValue == value and now - lastAspectApply < 2.50 then
+        return true
+    end
+    local ok = setConVar("r_aspectratio", value)
+    local readback = readConVar("r_aspectratio", nil)
+    local verified = ok and type(readback) == "number" and math.abs(readback - value) <= 0.02
+    lastAspectApply, lastAspectValue = now, value
+    aspectApplied = verified == true
+    aspectStatus = verified
+        and string.format("%.2f (engine %.2f)", value, readback)
+        or "FOV command refused"
+    return verified
+end
+
+local function restoreAspect()
+    local value = tonumber(original.aspect) or 0
+    local ok = setConVar("r_aspectratio", value)
+    aspectApplied = false
+    lastAspectValue, lastAspectApply = nil, -100
+    aspectStatus = ok and (value == 0 and "automatic" or string.format("restored %.2f", value))
+        or "FOV restore failed"
     return ok
 end
 
@@ -3912,15 +4025,18 @@ local function apply(force)
     local nativeX = clamp(x, -2.0, 2.5)
     local nativeY = clamp(y, -2.0, 2.0)
     local nativeZ = clamp(z, -2.0, 2.0)
+    local fallbackReason
     if extended:Get() then
         local hooked, reason = EXT.install()
         if not hooked then
             extended:Set(false)
-            status = "extended mode refused: " .. tostring(reason or EXT.lastError or "validation failed")
-            lastSignature = ""
-            return false
+            fallbackReason = tostring(reason or EXT.lastError or "validation failed")
+            -- Keep the portable native viewmodel functional even when another
+            -- hook owns the call site or this CS2 build fails validation.
+            pcall(EXT.uninstall)
+        else
+            EXT.set(x - nativeX, y - nativeY, z - nativeZ)
         end
-        EXT.set(x - nativeX, y - nativeY, z - nativeZ)
     else
         EXT.uninstall()
     end
@@ -3928,9 +4044,12 @@ local function apply(force)
     ok = setConVar("viewmodel_offset_x", nativeX) and ok
     ok = setConVar("viewmodel_offset_y", nativeY) and ok
     ok = setConVar("viewmodel_offset_z", nativeZ) and ok
-    lastApply, lastSignature = now, sig
-    local mode = extended:Get() and "extended XYZ" or "native XYZ"
+    lastApply, lastSignature = now, signature()
+    local mode = extended:Get() and "extended XYZ" or (fallbackReason and "native fallback" or "native XYZ")
     status = string.format("%s | X %.1f Y %.1f Z %.1f", mode, x, y, z)
+    if fallbackReason then
+        status = status .. " | extended unavailable: " .. fallbackReason
+    end
     if not ok then status = "partial apply: " .. status end
     return ok
 end
@@ -3963,16 +4082,21 @@ presets:Button("Extreme", function() usePreset(8.0, 8.0, -5.0, "extreme", true) 
 
 actions:Button("Apply now", function()
     enabled:Set(true)
-    local ok = apply(true); saveConfig()
+    local ok = apply(true)
+    if aspectEnabled:Get() then ok = applyAspect(true) and ok end
+    saveConfig()
     M:Notify(ok and status or "viewmodel could not be applied", ok and "success" or "error")
 end)
 actions:Button("Restore original", function()
     enabled:Set(false)
-    local ok = restore(); saveConfig()
+    aspectEnabled:Set(false)
+    local ok = restore()
+    ok = restoreAspect() and ok
+    saveConfig()
     M:Notify(status, ok and "success" or "error")
 end)
 actions:Button("Show current values", function()
-    M:Notify(status .. " | knife hand: " .. knifeHandStatus, "info")
+    M:Notify(status .. " | FOV: " .. aspectStatus .. " | knife hand: " .. knifeHandStatus, "info")
 end)
 
 local function commandHand(left)
@@ -4048,10 +4172,12 @@ M._viewmodelCommandCallback = function()
 end
 
 lastEnabled, lastExtended = enabled:Get(), extended:Get()
+lastAspectEnabled = aspectEnabled:Get()
 M:OnFrame(function()
     local now = clock()
     local on = enabled:Get()
     local ext = extended:Get()
+    local aspectOn = aspectEnabled:Get()
     if on then
         pcall(apply, false)
     elseif lastEnabled then
@@ -4059,7 +4185,13 @@ M:OnFrame(function()
     elseif EXT.installed then
         pcall(EXT.uninstall)
     end
+    if aspectOn then
+        pcall(applyAspect, false)
+    elseif lastAspectEnabled or aspectApplied then
+        pcall(restoreAspect)
+    end
     lastEnabled, lastExtended = on, ext
+    lastAspectEnabled = aspectOn
     local sig = signature()
     if (sig ~= lastSignature or now - lastSave >= 2.50) and now - lastSave >= 0.50 then
         lastSave = now
@@ -4073,6 +4205,7 @@ pcall(function()
         if knifeLeftOwned then pcall(commandHand, false) end
         M._viewmodelCommandCallback = nil
         M._viewmodelCommandActive = nil
+        if aspectApplied or aspectEnabled:Get() then pcall(restoreAspect) end
         if enabled:Get() then pcall(restore) end
         pcall(EXT.uninstall)
         pcall(callbacks.Unregister, "Unload", "rgnMultitool_ViewmodelUnload")
@@ -11329,6 +11462,16 @@ local function voteLogicTick(t)
     if endAt > 0 and t >= endAt then clearVote("ready"); return end
 end
 
+-- Primary runtime path. The UI library owns the durable CreateMove bridge and
+-- invokes this function before handling menu input. nextLogicTick makes this
+-- safe when the legacy callback below is also dispatched by Aimware.
+M._voteLogicCallback = function()
+    local t = clock()
+    if t < nextLogicTick then return end
+    nextLogicTick = t + 0.05
+    voteLogicTick(t)
+end
+
 pcall(function() callbacks.Unregister("Draw", "rgnMultitool_VoteDraw") end)
 pcall(function() callbacks.Unregister("CreateMove", "rgnMultitool_VoteLogic") end)
 pcall(function() callbacks.Unregister("FireGameEvent", "rgnMultitool_VoteEvents") end)
@@ -11355,6 +11498,9 @@ callbacks.Register("Unload", function()
     if rawget(_G, "RGN_VOTE_RUNTIME_GENERATION") ~= runtimeGeneration then return end
     rawset(_G, "RGN_VOTE_RUNTIME_GENERATION", runtimeGeneration + 1)
     pcall(callbacks.Unregister, "CreateMove", "rgnMultitool_VoteLogic")
+    M._voteLogicCallback = nil
+    M._voteLogicAliveAt = nil
+    M._voteLogicError = nil
     logicBusy = false
 end)
 

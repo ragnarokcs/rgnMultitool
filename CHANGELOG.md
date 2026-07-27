@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.4.3 - 2026-07-27
+
+### Cross-PC compatibility and runtime verification
+
+- Fixed custom-character discovery when CS2 or another overlay changes the process working directory to `game/csgo/bin/win64`, which previously could resolve an invalid duplicated `csgo/csgo/characters` path.
+- Added a `client.dll` module-path fallback for custom-character and custom-sound discovery while retaining bounded Unicode-only access inside `game/csgo`.
+- Viewmodel X/Y/Z writes now use Aimware's documented `client.SetConVar` path first, verify the live value and fall back to an unrestricted console command only when required.
+- Extended XYZ now degrades to the safe native viewmodel range when its validated call site is unavailable or already owned by another hook, rather than leaving the entire viewmodel action unapplied.
+- Restored the vote queue service through the durable shared `CreateMove` bridge so detected votes continue reaching local chat after reconnects and map changes.
+- Added the opt-in projection FOV control without changing the existing X/Y/Z or left-hand-knife behavior.
+
 ## 1.4.2 - 2026-07-23
 
 ### Stability and portable asset discovery

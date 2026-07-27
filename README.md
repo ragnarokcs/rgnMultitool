@@ -87,12 +87,13 @@ Click any preview to open the full-size image.
 - Knife models and finishes with automatic reapplication after spawn, death, team changes and map changes.
 - Glove models and finishes with guarded refresh timing to prevent flicker and repeated writes.
 - Official agents with saved selection.
-- Custom character models discovered from the local `game/csgo/characters` directory, including Steam libraries whose paths contain non-English characters.
+- Custom character models discovered from the local `game/csgo/characters` directory, including Steam libraries whose paths contain non-English characters and sessions whose working directory was changed by Steam or another overlay.
 - Automatic cosmetic persistence plus five named weapon, knife and glove profiles.
 
 ### Viewmodel and movement
 
-- Safe extended X, Y and Z viewmodel positioning with presets.
+- Verified X, Y and Z viewmodel positioning with presets. The documented convar path is used first; extended mode safely falls back to the native range if its validated hook is unavailable.
+- Optional projection FOV override, saved independently from X/Y/Z.
 - Optional automatic left-hand knife, routed through the main command hook, with right-hand restoration for other weapons.
 - Velocity display and configurable jump trail.
 - Prediction edge-bug helper with hold/toggle activation.
@@ -148,6 +149,7 @@ Click any preview to open the full-size image.
 - Region forcing uses only regular CS2 console settings, never a LuaJIT call through a game-owned SteamNetworkingSockets interface, and never mutates the preference while connected to a live server.
 - Local configuration files only; no user-specific Windows paths are embedded.
 - Built-in update check with source-size, signature, version and Lua syntax validation.
+- Menu resolution does not affect custom-asset discovery or viewmodel values; both paths are independent of screen coordinates and support 1920x1080 and other common resolutions.
 
 The distributed `loader.lua` checks the small `version.txt` manifest on startup. It downloads the full source only when the published version changes, validates the release signature and Lua syntax, then keeps a local offline cache. Updates are never hot-loaded while a match is running; use **CONFIGS > Check for updates**, then run the Lua again.
 
@@ -155,10 +157,18 @@ The distributed `loader.lua` checks the small `version.txt` manifest on startup.
 
 1. Download only [`loader.lua`](https://raw.githubusercontent.com/ragnarokcs/rgnMultitool/main/loader.lua) and place it in Aimware's Lua scripts folder.
 2. In Aimware Lua permissions, allow internet connections and editing Lua files.
-3. Run `loader.lua`.
-4. Keep only one rgnMultitool loader/source active at a time.
+3. Enable **Allow game scripting** and **Allow insecure FFI** for the cosmetics, custom-character and extended-viewmodel modules.
+4. Run `loader.lua`.
+5. Keep only one rgnMultitool loader/source active at a time.
 
 Keep `loader.lua` as the only rgnMultitool script configured for autorun. The loader and full source use relative data filenames and contain no Windows username or PC-specific installation path.
+
+### Custom assets and viewmodel compatibility
+
+- Screen resolution does not control either module; 1920x1080, other 16:9 resolutions and 4:3 layouts use the same game-relative asset paths and viewmodel values.
+- Custom characters must be compiled `.vmdl_c` resources below `game/csgo/characters`, with their complete materials beside them. Use **Skins Custom > Portable status / requirements** to print the exact resolved folder and engine status.
+- The regular X/Y/Z controls use Aimware's documented convar API and work without the extended hook. **Extended XYZ** is optional and automatically falls back to the native range when the current CS2 call site cannot be safely validated.
+- If assets were copied while CS2 was already open, restart CS2 before running the Lua so Source 2 can mount the resources.
 
 ## Update safety
 
