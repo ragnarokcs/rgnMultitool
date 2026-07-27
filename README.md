@@ -93,7 +93,7 @@ Click any preview to open the full-size image.
 ### Viewmodel and movement
 
 - Verified X, Y and Z viewmodel positioning with presets. The documented convar path is used first; extended mode safely falls back to the native range if its validated hook is unavailable.
-- Optional projection FOV override, saved independently from X/Y/Z.
+- Optional 60–120 View FOV override through Aimware's native setting, keeping native ESP projection synchronized and saved independently from X/Y/Z.
 - Optional automatic left-hand knife, routed through the main command hook, with right-hand restoration for other weapons.
 - Velocity display and configurable jump trail.
 - Prediction edge-bug helper with hold/toggle activation.
