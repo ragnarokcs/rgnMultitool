@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.4.5 - 2026-08-04
+
+### Post-update compatibility guard
+
+- Removed the July hardcoded runtime-offset fallback from the native cosmetics bootstrap.
+- Requires a complete current offsets dump and the matching current client schema before loading the native weapon, knife, glove and agent engine.
+- Invalid, missing or truncated metadata now leaves the native cosmetics module unavailable instead of continuing with stale addresses after a CS2 update.
+- Preserved the documented Aimware-only modules and the loader's last-known-good source validation.
+
 ## 1.4.4 - 2026-07-27
 
 ### Synchronized FOV hotfix

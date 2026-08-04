@@ -1,5 +1,5 @@
--- rgnMultitool 1.4.4
-local RGN_MULTITOOL_VERSION = "1.4.4"
+-- rgnMultitool 1.4.5
+local RGN_MULTITOOL_VERSION = "1.4.5"
 local RGN_MULTITOOL_SIGNATURE = "RGN_MULTITOOL_SOURCE_V1"
 _G.RGN_MULTITOOL_VERSION = RGN_MULTITOOL_VERSION
 
@@ -4741,6 +4741,7 @@ pcall(function() callbacks.Unregister("Draw", "rgnWEAPONS_LateMesh") end)
 local ENGINE_REV = "957eedf27b832e505656475ee57f91b3b14b4340"
 local ENGINE_URL = "https://raw.githubusercontent.com/cachorropacoca/aw_cs2v6_femboytap/" .. ENGINE_REV .. "/preview/femboytap_changer.lua"
 local OFFSETS_URL = "https://raw.githubusercontent.com/a2x/cs2-dumper/main/output/offsets.json"
+local SCHEMA_URL = "https://raw.githubusercontent.com/a2x/cs2-dumper/main/output/client_dll.json"
 local ENGINE_CACHE = "rgnweapons_preview_engine_cache.lua"
 local ENGINE_MIN_SIZE = 90000
 local EMBEDDED_ENGINE = [====[
@@ -6296,26 +6297,48 @@ local function fetchEngine()
 end
 
 local function fetchRuntimeOffsets()
-    local json
-    if type(http) == "table" and type(http.Get) == "function" then
-        pcall(function() json = http.Get(OFFSETS_URL .. "?rgn=" .. tostring({}):gsub("%W", "")) end)
-        if type(json) ~= "string" or #json < 1000 then pcall(function() json = http.Get(OFFSETS_URL) end) end
+    if type(http) ~= "table" or type(http.Get) ~= "function" then
+        return nil, "current CS2 metadata unavailable: internet API disabled"
     end
-    -- Validated fallback for the packaged CS2 build. Live cs2-dumper values,
-    -- when available, replace these without making internet mandatory.
-    local values = {
-        dwEntityList = 39120480,
-        dwLocalPlayerController = 37219232,
-        dwNetworkGameClient = 9491632,
-        dwNetworkGameClient_signOnState = 560,
-    }
-    if type(json) ~= "string" then return values end
+
+    local function fetchCurrent(url, minimum)
+        local body
+        pcall(function() body = http.Get(url .. "?rgn=" .. tostring({}):gsub("%W", "")) end)
+        if type(body) ~= "string" or #body < minimum then
+            pcall(function() body = http.Get(url) end)
+        end
+        if type(body) == "string" and #body >= minimum then return body end
+        return nil
+    end
+
+    local json = fetchCurrent(OFFSETS_URL, 1000)
+    if not json then return nil, "current CS2 offsets unavailable" end
+
+    local values = {}
     for _, key in ipairs({
         "dwEntityList", "dwLocalPlayerController",
         "dwNetworkGameClient", "dwNetworkGameClient_signOnState",
     }) do
         local parsed = tonumber(json:match('"' .. key .. '"%s*:%s*(%d+)'))
-        if parsed then values[key] = parsed end
+        if not parsed or parsed <= 0 or parsed >= 0x40000000 then
+            return nil, "invalid current CS2 offset: " .. key
+        end
+        values[key] = parsed
+    end
+
+    -- The embedded engine also needs live schema fields. Refuse to start the
+    -- native cosmetics path when that dump cannot be verified; old hardcoded
+    -- field values are more dangerous than leaving the module unavailable.
+    local schema = fetchCurrent(SCHEMA_URL, 10000)
+    if not schema then return nil, "current CS2 schema unavailable" end
+    for _, field in ipairs({
+        "m_pWeaponServices", "m_hMyWeapons", "m_hActiveWeapon",
+        "m_AttributeManager", "m_Item", "m_pGameSceneNode",
+        "m_iItemDefinitionIndex", "m_nFallbackPaintKit",
+    }) do
+        if not schema:find('"' .. field .. '"', 1, true) then
+            return nil, "current CS2 schema missing: " .. field
+        end
     end
     return values
 end
@@ -7419,11 +7442,12 @@ if type(rawget(_G, "ffi")) ~= "table" or type(rawget(_G, "bit")) ~= "table" then
 elseif type(mem) ~= "table" then
     engineError = "Aimware mem API unavailable"
 else
-    runtimeOffsets = fetchRuntimeOffsets()
-    local source, where = fetchEngine()
-    if not source then
-        engineError = where
-    else
+    runtimeOffsets, engineError = fetchRuntimeOffsets()
+    if runtimeOffsets then
+        local source, where = fetchEngine()
+        if not source then
+            engineError = where
+        else
         local rawSource, prepared = source, nil
         prepared, engineError = prepareEngine(rawSource)
         if not prepared and where == "GitHub" then
@@ -7447,6 +7471,7 @@ else
                     engineError = "engine load error: " .. tostring(result)
                 end
             end
+        end
         end
     end
 end

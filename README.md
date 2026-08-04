@@ -140,6 +140,7 @@ Click any preview to open the full-size image.
 
 ### Reliability
 
+- Native cosmetics now fail closed after a CS2 update unless both the current runtime offsets and matching client schema can be fetched and validated; stale packaged addresses are never used as an offline fallback.
 - Event-driven cosmetic engine with sparse maintenance work for reduced frame-time impact.
 - Disabled Killsay, Custom Sounds, Movement, Scope Overlay, left-hand knife and Identity paths now short-circuit before protected callbacks, entity work or session polling.
 - Killsay no longer writes diagnostic files for unrelated server deaths; runtime files are reserved for state transitions, send failures and actionable diagnostics.
